@@ -24,7 +24,7 @@ type RootModel struct {
 	table        table.Model
 	selectedID   string
 	isDetailView bool
-	activeTab    int // 0: CPU, 1: Mem, 2: Net, 3: Storage, 4: KVM
+	activeTab    int // 0: CPU, 1: Mem, 2: Net, 3: Storage, 4: KVM, 5: Migration
 	sortColumn   int
 	sortReverse  bool
 	isPaused     bool
@@ -35,7 +35,7 @@ type RootModel struct {
 func NewRootModel(s *store.DomainStore) RootModel {
 	columns := []table.Column{
 		{Title: "Name", Width: 16},
-		{Title: "State", Width: 10},
+		{Title: "State", Width: 12},
 		{Title: "vCPUs", Width: 6},
 		{Title: "CPU%", Width: 8},
 		{Title: "Mem", Width: 10},
@@ -77,7 +77,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "tab":
 			if m.isDetailView {
-				m.activeTab = (m.activeTab + 1) % 5
+				m.activeTab = (m.activeTab + 1) % 6
 			}
 		case "s":
 			if !m.isDetailView {
@@ -177,8 +177,13 @@ func (m *RootModel) refreshTableData() {
 			totalIO += d.RdBytes + d.WrBytes
 		}
 
+		stateLabel := snap.State
+		if snap.Migration != nil && snap.Migration.Status == "active" {
+			stateLabel = fmt.Sprintf("%s ⇄", snap.State) // Inject active indicator
+		}
+
 		rows = append(rows, table.Row{
-			snap.Name, snap.State, fmt.Sprintf("%d", len(snap.VCPUs)), fmt.Sprintf("%5.1f%%", totalCPU),
+			snap.Name, stateLabel, fmt.Sprintf("%d", len(snap.VCPUs)), fmt.Sprintf("%5.1f%%", totalCPU),
 			fmt.Sprintf("%d MiB", snap.Mem.RssKiB/1024), panels.FormatBytes(totalRx), panels.FormatBytes(totalTx), panels.FormatBytes(totalIO),
 		})
 	}
@@ -252,6 +257,12 @@ func (m RootModel) View() string {
 				}
 				return tabStyle.Render("5. KVM Exits")
 			}(),
+			func() string {
+				if m.activeTab == 5 {
+					return activeTabStyle.Render("6. Migration")
+				}
+				return tabStyle.Render("6. Migration")
+			}(),
 		)
 
 		var currentPanel string
@@ -266,6 +277,8 @@ func (m RootModel) View() string {
 			currentPanel = panels.RenderIOPanel(snap)
 		case 4:
 			currentPanel = panels.RenderKVMPanel(snap, m.width)
+		case 5:
+			currentPanel = panels.RenderMigrationPanel(snap, m.width)
 		}
 
 		contentBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#5F5FDF")).Padding(1, 2).Width(m.width - 4).Render(currentPanel)

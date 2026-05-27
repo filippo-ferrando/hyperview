@@ -30,8 +30,10 @@ func main() {
 		log.Printf("Warning: Host OS procfs collection engine offline: %v", err)
 	}
 
-	// Register low-overhead kernel tracing eBPF collector
 	registry.Register(collect.NewEBPFCollector())
+
+	// Register live QEMU Monitor Protocol Collector engine
+	registry.Register(collect.NewQMPCollector("/var/run/libvirt/qemu"))
 
 	go func() {
 		ticker := time.NewTicker(250 * time.Millisecond)
