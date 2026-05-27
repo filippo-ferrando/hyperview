@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"hyperview/internal/store"
@@ -15,19 +16,19 @@ import (
 
 type TickMsg time.Time
 
-func Tick() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg { return TickMsg(t) })
-}
-
 type RootModel struct {
 	store        *store.DomainStore
 	table        table.Model
 	selectedID   string
 	isDetailView bool
-	activeTab    int // 0: CPU, 1: Mem, 2: Net, 3: Storage, 4: KVM, 5: Migration
+	activeTab    int
 	sortColumn   int
 	sortReverse  bool
 	isPaused     bool
+	showHelp     bool // NEW (Phase 6 Overlay Switch)
+	showLogs     bool // NEW (Phase 6 Overlay Switch)
+	domainFilter string
+	tickDuration time.Duration
 	width        int
 	height       int
 }
@@ -48,10 +49,15 @@ func NewRootModel(s *store.DomainStore) RootModel {
 	sStyle.Header = sStyle.Header.Background(lipgloss.Color("#5F5FDF")).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
 	sStyle.Selected = sStyle.Selected.Background(lipgloss.Color("#5F5F5F")).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
 	t.SetStyles(sStyle)
-	return RootModel{store: s, table: t}
+	return RootModel{store: s, table: t, tickDuration: 250 * time.Millisecond}
 }
 
-func (m RootModel) Init() tea.Cmd { return Tick() }
+func (m *RootModel) SetTickInterval(d time.Duration) { m.tickDuration = d }
+func (m *RootModel) SetDomainFilter(f string)        { m.domainFilter = f }
+
+func (m RootModel) Init() tea.Cmd {
+	return tea.Tick(m.tickDuration, func(t time.Time) tea.Msg { return TickMsg(t) })
+}
 
 func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -61,9 +67,26 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
+		// Modal checks to intercept standard input routing mechanisms
+		if m.showHelp || m.showLogs {
+			switch msg.String() {
+			case "q", "esc", "?", "l":
+				m.showHelp = false
+				m.showLogs = false
+				return m, nil
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "?":
+			m.showHelp = true
+			return m, nil
+		case "l":
+			m.showLogs = true
+			return m, nil
 		case "esc":
 			if m.isDetailView {
 				m.isDetailView = false
@@ -96,9 +119,9 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.isPaused {
 			m.refreshTableData()
 		}
-		return m, Tick()
+		return m, tea.Tick(m.tickDuration, func(t time.Time) tea.Msg { return TickMsg(t) })
 	}
-	if !m.isDetailView {
+	if !m.isDetailView && !m.showHelp && !m.showLogs {
 		m.table, cmd = m.table.Update(msg)
 	}
 	return m, cmd
@@ -106,6 +129,18 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *RootModel) refreshTableData() {
 	snaps := m.store.Snapshot()
+
+	// Apply start domain filter query strings if actively initialized
+	if m.domainFilter != "" {
+		var filtered []store.DomainSnapshot
+		for _, s := range snaps {
+			if strings.Contains(strings.ToLower(s.Name), strings.ToLower(m.domainFilter)) {
+				filtered = append(filtered, s)
+			}
+		}
+		snaps = filtered
+	}
+
 	sort.Slice(snaps, func(i, j int) bool {
 		var less bool
 		switch m.sortColumn {
@@ -179,7 +214,7 @@ func (m *RootModel) refreshTableData() {
 
 		stateLabel := snap.State
 		if snap.Migration != nil && snap.Migration.Status == "active" {
-			stateLabel = fmt.Sprintf("%s ⇄", snap.State) // Inject active indicator
+			stateLabel = fmt.Sprintf("%s ⇄", snap.State)
 		}
 
 		rows = append(rows, table.Row{
@@ -193,6 +228,42 @@ func (m *RootModel) refreshTableData() {
 func (m RootModel) View() string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#5F5FDF")).Padding(0, 1)
 	footerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#707070")).Italic(true)
+	modalStyle := lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("#FFAF00")).Padding(1, 3).Background(lipgloss.Color("#1C1C1C")).Width(70)
+
+	// 1. Render Help Overlay Modal
+	if m.showHelp {
+		helpContent := lipgloss.JoinVertical(
+			lipgloss.Left,
+			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFAF00")).Render("HYPERVIEW INTERACTIVE KEYBOARD COMMANDS REFERENCE"),
+			"",
+			"  ↑ / ↓   ➔ Navigate and select virtualization targets inside index list",
+			"  Enter   ➔ Drill down into comprehensive metrics of selected node",
+			"  Tab     ➔ Cycle cross-sectional views inside selected cluster sub-panels",
+			"  s       ➔ Rotate table data matching next statistics field index",
+			"  r       ➔ Toggle inverse collection list sorting logic",
+			"  p       ➔ Pause/Resume active monitor background evaluation frames",
+			"  l       ➔ Toggle application runtime logs capture modal",
+			"  ?       ➔ Show this reference manual information summary overlay box",
+			"  Esc     ➔ Collapse detail sub-panes or quit core console binary",
+			"",
+			lipgloss.NewStyle().Foreground(lipgloss.Color("#707070")).Render("Press any modal control switch (?|l|Esc) to clear view context."),
+		)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modalStyle.Render(helpContent))
+	}
+
+	// 2. Render Log Overlay Modal
+	if m.showLogs {
+		logLines := GlobalLogRing.GetTail(15)
+		logBoxContent := lipgloss.JoinVertical(
+			lipgloss.Left,
+			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFAF00")).Render("REAL-TIME STRUCTURED RUNTIME TRANSACTION LOGS"),
+			"",
+			strings.Join(logLines, ""),
+			"",
+			lipgloss.NewStyle().Foreground(lipgloss.Color("#707070")).Render("Press any modal control switch (?|l|Esc) to clear view context."),
+		)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modalStyle.Width(m.width-10).Render(logBoxContent))
+	}
 
 	pauseText := ""
 	if m.isPaused {
@@ -282,12 +353,12 @@ func (m RootModel) View() string {
 		}
 
 		contentBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#5F5FDF")).Padding(1, 2).Width(m.width - 4).Render(currentPanel)
-		return lipgloss.JoinVertical(lipgloss.Left, headerStyle.Render(fmt.Sprintf("hyperview Dashboard > Node: %s%s%s", snap.Name, ebpfIndicator, pauseText)), "", tabRow, contentBox, "", footerStyle.Render("➔ Tab: Cycle Detail Panels · P: Toggle Pause · Esc: Return to Host Index View"))
+		return lipgloss.JoinVertical(lipgloss.Left, headerStyle.Render(fmt.Sprintf("hyperview Dashboard > Node: %s%s%s", snap.Name, ebpfIndicator, pauseText)), "", tabRow, contentBox, "", footerStyle.Render("➔ Tab: Cycle Detail Panels · P: Toggle Pause · L: Show Logs · ?: Key Bindings · Esc: Return"))
 	}
 
 	sortText := fmt.Sprintf(" [Sorted by: %s]", m.table.Columns()[m.sortColumn].Title)
 	if m.sortReverse {
 		sortText += " (Reverse)"
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, headerStyle.Render(fmt.Sprintf("hyperview — Active Hypervisor Monitor%s%s%s", sortText, ebpfIndicator, pauseText)), "", m.table.View(), "", footerStyle.Render("➔ Navigation: ↑/↓ Browse · Enter Inspect · S Cycle Sort · R Reverse Sort · P Pause · Q Quit"))
+	return lipgloss.JoinVertical(lipgloss.Left, headerStyle.Render(fmt.Sprintf("hyperview — Active Hypervisor Monitor%s%s%s", sortText, ebpfIndicator, pauseText)), "", m.table.View(), "", footerStyle.Render("➔ Navigation: ↑/↓ Browse · Enter Inspect · S Sort · R Reverse · P Pause · L Logs · ?: Help · Q Quit"))
 }

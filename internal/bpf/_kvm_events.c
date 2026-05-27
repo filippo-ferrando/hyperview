@@ -1,3 +1,4 @@
+// internal/bpf/_kvm_events.c
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
@@ -43,18 +44,24 @@ int handle_kvm_exit(struct trace_event_raw_kvm_exit *ctx) {
   if (!e)
     return 0;
 
+  // Read context values safely into the ring buffer struct
   e->pid = tgid;
   e->vcpu_id = ctx->vcpu_id;
   e->exit_reason = ctx->exit_reason;
   e->timestamp_ns = bpf_ktime_get_ns();
   bpf_ringbuf_submit(e, 0);
 
+  // FIX: Copy the context value onto the stack frame (fp)
+  __u32 exit_reason = ctx->exit_reason;
+
   __u64 one = 1, *cnt;
-  cnt = bpf_map_lookup_elem(&exit_counts, &ctx->exit_reason);
+  // Pass the stack reference (&exit_reason) instead of context reference
+  // (&ctx->exit_reason)
+  cnt = bpf_map_lookup_elem(&exit_counts, &exit_reason);
   if (cnt) {
     __sync_fetch_and_add(cnt, 1);
   } else {
-    bpf_map_update_elem(&exit_counts, &ctx->exit_reason, &one, BPF_ANY);
+    bpf_map_update_elem(&exit_counts, &exit_reason, &one, BPF_ANY);
   }
   return 0;
 }

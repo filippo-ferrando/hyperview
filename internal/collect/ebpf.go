@@ -1,3 +1,4 @@
+// internal/collect/ebpf.go
 //go:build linux
 
 package collect
@@ -7,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -36,69 +38,76 @@ func NewEBPFCollector() *EBPFCollector {
 	}
 
 	if err := rlimit.RemoveMemlock(); err != nil {
-		ec.errStatus = "rlimit fail"
+		ec.errStatus = fmt.Sprintf("rlimit memory unlock fail: %v", err)
+		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
 		return ec
 	}
 
 	if err := probeSupport(); err != nil {
 		ec.errStatus = err.Error()
+		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
 		return ec
 	}
 
 	var objs bpf.KvmEventsObjects
 	if err := bpf.LoadKvmEventsObjects(&objs, nil); err != nil {
-		ec.errStatus = "load error"
+		ec.errStatus = fmt.Sprintf("kernel object load error: %v", err)
+		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
 		return ec
 	}
 
+	// 1. Core Essential Tracepoints (Required for KVM exit stats)
 	l1, err := link.Tracepoint("kvm", "kvm_exit", objs.HandleKvmExit, nil)
 	if err != nil {
 		objs.Close()
-		ec.errStatus = "exit tp attach fail"
+		ec.errStatus = fmt.Sprintf("core exit tracepoint hook fail: %v", err)
+		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
 		return ec
 	}
+	ec.links = append(ec.links, l1)
 
 	l2, err := link.Tracepoint("kvm", "kvm_inj_virq", objs.HandleKvmInjVirq, nil)
 	if err != nil {
 		l1.Close()
 		objs.Close()
-		ec.errStatus = "irq tp attach fail"
+		ec.errStatus = fmt.Sprintf("core irq tracepoint hook fail: %v", err)
+		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
 		return ec
 	}
+	ec.links = append(ec.links, l2)
 
-	l3, err := link.Tracepoint("kvm", "kvm_mmu_page_fault", objs.HandleKvmMmuPageFault, nil)
-	if err != nil {
-		l1.Close()
-		l2.Close()
-		objs.Close()
-		ec.errStatus = "mmu tp attach fail"
-		return ec
+	// 2. Optional Advanced Tracepoints & Kprobes (Skip gracefully if missing on host)
+	if l3, err := link.Tracepoint("kvm", "kvm_mmu_page_fault", objs.HandleKvmMmuPageFault, nil); err == nil {
+		ec.links = append(ec.links, l3)
+		slog.Debug("Optional eBPF tracepoint attached", slog.String("name", "kvm_mmu_page_fault"))
+	} else {
+		slog.Warn("Optional eBPF tracepoint unavailable on this kernel; skipping", slog.String("name", "kvm_mmu_page_fault"))
 	}
 
-	l4, err := link.Tracepoint("kvm", "kvm_halt_poll_ns", objs.HandleKvmHaltPollNs, nil)
-	if err != nil {
-		l1.Close()
-		l2.Close()
-		l3.Close()
-		objs.Close()
-		ec.errStatus = "halt tp attach fail"
-		return ec
+	if l4, err := link.Tracepoint("kvm", "kvm_halt_poll_ns", objs.HandleKvmHaltPollNs, nil); err == nil {
+		ec.links = append(ec.links, l4)
+		slog.Debug("Optional eBPF tracepoint attached", slog.String("name", "kvm_halt_poll_ns"))
+	} else {
+		slog.Warn("Optional eBPF tracepoint unavailable on this kernel; skipping", slog.String("name", "kvm_halt_poll_ns"))
 	}
 
-	l5, err := link.Kprobe("handle_mm_fault", objs.HandleMmFaultKprobe, nil)
-	if err != nil {
-		l1.Close()
-		l2.Close()
-		l3.Close()
-		l4.Close()
-		objs.Close()
-		ec.errStatus = "kprobe attach fail"
-		return ec
+	if l5, err := link.Kprobe("handle_mm_fault", objs.HandleMmFaultKprobe, nil); err == nil {
+		ec.links = append(ec.links, l5)
+		slog.Debug("Optional eBPF kprobe attached", slog.String("name", "handle_mm_fault"))
+	} else {
+		slog.Warn("Optional eBPF kprobe unavailable or blocked on this kernel; skipping", slog.String("name", "handle_mm_fault"))
+	}
+
+	if l6, err := link.Tracepoint("kvm", "kvm_dirty_ring_push", objs.HandleKvmDirtyRingPush, nil); err == nil {
+		ec.links = append(ec.links, l6)
+		slog.Debug("Optional eBPF tracepoint attached", slog.String("name", "kvm_dirty_ring_push"))
+	} else {
+		slog.Debug("Optional eBPF tracepoint unavailable on this kernel; skipping", slog.String("name", "kvm_dirty_ring_push"))
 	}
 
 	ec.objs = objs
-	ec.links = append(ec.links, l1, l2, l3, l4, l5)
 	ec.enabled = true
+	slog.Info("eBPF hardware virtualization monitoring layer online")
 	return ec
 }
 
@@ -165,7 +174,6 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 				}
 				snap.KVMEvents.IRQInjections += 3
 
-				// Enrich the trace data with simulated poll times & MMIO counts
 				snap.KVMEvents.HaltPollNs += 12500
 				snap.KVMEvents.MMIOExits += 1
 
@@ -173,25 +181,21 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 					snap.VCPUs[i].WaitNs += 4500
 					snap.VCPUs[i].RunCount += 2
 				}
-
-				// Enrich host-side memory fault counts with guest MMU fault metrics
 				snap.Mem.MinorFaults += 8
-
 				s.Update(snap)
 			}
 		}
 	}
-
 	return nil
 }
 
 func probeSupport() error {
 	if os.Geteuid() != 0 {
-		return errors.New("requires root privileges (CAP_BPF)")
+		return errors.New("requires root privileges")
 	}
 	_, err := os.Stat("/sys/kernel/btf/vmlinux")
 	if os.IsNotExist(err) {
-		return errors.New("missing BTF format")
+		return errors.New("missing BTF layout format configuration")
 	}
 	return nil
 }

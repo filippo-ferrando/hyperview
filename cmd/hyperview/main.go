@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"flag"
+	"io"
 	"log"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"hyperview/internal/collect"
@@ -15,6 +19,51 @@ import (
 )
 
 func main() {
+	// 1. Definition of runtime command line configuration flags
+	intervalFlag := flag.Int("interval", 250, "Data collection refresh interval window in milliseconds")
+	logLevelFlag := flag.String("log-level", "info", "Structured file logging granularity target (debug|info|warn|error)")
+	domainFilterFlag := flag.String("domain", "", "Optional domain instance name keyword string to filter viewport matches on start")
+	flag.Parse()
+
+	// 2. Resolve target directories to construct absolute home paths safely
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = os.TempDir()
+	}
+	logDir := filepath.Join(homeDir, ".local", "share", "hyperview")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		log.Fatalf("Fatal directory instantiation collision: %v", err)
+	}
+	logFilePath := filepath.Join(logDir, "hyperview.log")
+
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Fatalf("Fatal system file access lock: %v", err)
+	}
+	defer logFile.Close()
+
+	// 3. Configure the logging severity level
+	var level slog.Level
+	switch strings.ToLower(*logLevelFlag) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+
+	// Double write to local memory ring buffer to allow seamless "l" interactive overlays
+	multiWriter := io.MultiWriter(logFile, &tui.GlobalLogRing)
+	logger := slog.New(slog.NewTextHandler(multiWriter, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(logger)
+
+	slog.Info("Hyperview collection runtime engine online",
+		slog.Duration("tick_interval", time.Duration(*intervalFlag)*time.Millisecond),
+		slog.String("log_path", logFilePath))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -27,16 +76,16 @@ func main() {
 	if err == nil {
 		registry.Register(procColl)
 	} else {
-		log.Printf("Warning: Host OS procfs collection engine offline: %v", err)
+		slog.Warn("Host OS procfs engine offline", slog.Any("err", err))
 	}
 
 	registry.Register(collect.NewEBPFCollector())
-
-	// Register live QEMU Monitor Protocol Collector engine
 	registry.Register(collect.NewQMPCollector("/var/run/libvirt/qemu"))
 
+	// 4. Asynchronous data aggregation loop matching specified ticker window intervals
+	tickDuration := time.Duration(*intervalFlag) * time.Millisecond
 	go func() {
-		ticker := time.NewTicker(250 * time.Millisecond)
+		ticker := time.NewTicker(tickDuration)
 		defer ticker.Stop()
 		for {
 			select {
@@ -44,20 +93,31 @@ func main() {
 				return
 			case <-ticker.C:
 				for _, col := range registry.Collectors() {
-					_ = col.Collect(ctx, domainStore)
+					if err := col.Collect(ctx, domainStore); err != nil {
+						slog.Debug("Poller transaction timeout skipped",
+							slog.String("collector", col.Name()),
+							slog.Any("err", err))
+					}
 				}
 			}
 		}
 	}()
 
-	p := tea.NewProgram(tui.NewRootModel(domainStore), tea.WithAltScreen())
+	// 5. Instantiate UI view parameters with user filters mapped directly into state trackers
+	rootModel := tui.NewRootModel(domainStore)
+	rootModel.SetTickInterval(tickDuration)
+	if *domainFilterFlag != "" {
+		rootModel.SetDomainFilter(*domainFilterFlag)
+	}
+
+	p := tea.NewProgram(rootModel, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		log.Printf("Fatal runtime TUI crash: %v", err)
+		slog.Error("Fatal UI view engine crash event detected", slog.Any("err", err))
 		os.Exit(1)
 	}
 
 	for _, col := range registry.Collectors() {
 		_ = col.Close()
 	}
-	fmt.Println("Clean shutdown completed.")
+	slog.Info("Clean shutdown completed cleanly.")
 }

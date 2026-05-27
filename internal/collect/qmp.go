@@ -45,26 +45,34 @@ func NewQMPCollector(baseMonitorDir string) *QMPCollector {
 func (qc *QMPCollector) Name() string { return "qmp" }
 func (qc *QMPCollector) Close() error { return nil }
 
+// internal/collect/qmp.go
+
 func (qc *QMPCollector) Collect(ctx context.Context, s *store.DomainStore) error {
 	qc.mu.Lock()
 	defer qc.mu.Unlock()
 
 	snapshots := s.Snapshot()
 	for _, snap := range snapshots {
-		// Only run polling sequence when domain is active or explicitly paused
 		if snap.State != "running" && snap.State != "paused" {
 			continue
 		}
 
 		sockPath := fmt.Sprintf("%s/%s.monitor", qc.baseMonitorDir, snap.Name)
 		migrationData, err := qc.queryQMPSocket(sockPath)
-		// Sandbox Fallback: Simulate active migration parameters if live socket is absent
+		// REMOVE OR COMMENT OUT THE SIMULATION FALLBACK:
 		if err != nil {
-			migrationData = qc.generateSimulationTelemetry(snap.Name)
+			// Clear any old migration data if the socket connection is absent or drops
+			snap.Migration = nil
+			s.Update(snap)
+			continue
 		}
 
 		if migrationData != nil {
 			snap.Migration = migrationData
+			s.Update(snap)
+		} else {
+			// Clear state if query-migrate explicitly indicates status is "none" or completed
+			snap.Migration = nil
 			s.Update(snap)
 		}
 	}
