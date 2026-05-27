@@ -1,7 +1,5 @@
 package store
 
-// RingBuffer holds the last N snapshots for sparkline rendering.
-// Generic, thread-unsafe.
 type RingBuffer[T any] struct {
 	buf  []T
 	pos  int

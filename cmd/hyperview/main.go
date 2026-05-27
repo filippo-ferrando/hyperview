@@ -19,13 +19,11 @@ import (
 )
 
 func main() {
-	// 1. Definition of runtime command line configuration flags
 	intervalFlag := flag.Int("interval", 250, "Data collection refresh interval window in milliseconds")
 	logLevelFlag := flag.String("log-level", "info", "Structured file logging granularity target (debug|info|warn|error)")
 	domainFilterFlag := flag.String("domain", "", "Optional domain instance name keyword string to filter viewport matches on start")
 	flag.Parse()
 
-	// 2. Resolve target directories to construct absolute home paths safely
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		homeDir = os.TempDir()
@@ -42,7 +40,6 @@ func main() {
 	}
 	defer logFile.Close()
 
-	// 3. Configure the logging severity level
 	var level slog.Level
 	switch strings.ToLower(*logLevelFlag) {
 	case "debug":
@@ -55,7 +52,6 @@ func main() {
 		level = slog.LevelInfo
 	}
 
-	// Double write to local memory ring buffer to allow seamless "l" interactive overlays
 	multiWriter := io.MultiWriter(logFile, &tui.GlobalLogRing)
 	logger := slog.New(slog.NewTextHandler(multiWriter, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
@@ -82,7 +78,6 @@ func main() {
 	registry.Register(collect.NewEBPFCollector())
 	registry.Register(collect.NewQMPCollector("/var/run/libvirt/qemu"))
 
-	// 4. Asynchronous data aggregation loop matching specified ticker window intervals
 	tickDuration := time.Duration(*intervalFlag) * time.Millisecond
 	go func() {
 		ticker := time.NewTicker(tickDuration)
@@ -103,7 +98,6 @@ func main() {
 		}
 	}()
 
-	// 5. Instantiate UI view parameters with user filters mapped directly into state trackers
 	rootModel := tui.NewRootModel(domainStore)
 	rootModel.SetTickInterval(tickDuration)
 	if *domainFilterFlag != "" {

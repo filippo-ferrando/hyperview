@@ -17,7 +17,6 @@ func (m *MockCollector) Name() string {
 }
 
 func (m *MockCollector) Collect(ctx context.Context, s *store.DomainStore) error {
-	// Active mock loop stub for Phase 0 placeholder verification
 	return nil
 }
 

@@ -107,7 +107,6 @@ func (s *DomainStore) Update(snap DomainSnapshot) {
 		s.domains[snap.ID] = entry
 	}
 
-	// Persist data models across intermittent collector thread intervals
 	if len(snap.Ifaces) == 0 && len(entry.latest.Ifaces) > 0 {
 		snap.Ifaces = entry.latest.Ifaces
 	}
@@ -122,12 +121,10 @@ func (s *DomainStore) Update(snap DomainSnapshot) {
 		snap.Mem.AvailableKiB = entry.latest.Mem.AvailableKiB
 	}
 
-	// FIX: Retain real-time kernel eBPF trace records if not populated in current tick
 	if !snap.KVMEvents.Available && entry.latest.KVMEvents.Available {
 		snap.KVMEvents = entry.latest.KVMEvents
 	}
 
-	// FIX: Retain live hypervisor migration metrics safely
 	if snap.Migration == nil && entry.latest.Migration != nil {
 		snap.Migration = entry.latest.Migration
 	}

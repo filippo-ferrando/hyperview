@@ -56,7 +56,6 @@ func (qc *QMPCollector) Collect(ctx context.Context, s *store.DomainStore) error
 		sockPath := fmt.Sprintf("%s/%s.monitor", qc.baseMonitorDir, snap.Name)
 		migrationData, err := qc.queryQMPSocket(sockPath)
 		if err != nil {
-			// If not migrating or socket doesn't respond, ensure stats stay strictly nil
 			snap.Migration = nil
 			s.Update(snap)
 			continue

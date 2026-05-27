@@ -25,8 +25,8 @@ type RootModel struct {
 	sortColumn   int
 	sortReverse  bool
 	isPaused     bool
-	showHelp     bool // NEW (Phase 6 Overlay Switch)
-	showLogs     bool // NEW (Phase 6 Overlay Switch)
+	showHelp     bool
+	showLogs     bool
 	domainFilter string
 	tickDuration time.Duration
 	width        int
@@ -67,7 +67,6 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
-		// Modal checks to intercept standard input routing mechanisms
 		if m.showHelp || m.showLogs {
 			switch msg.String() {
 			case "q", "esc", "?", "l":
@@ -130,7 +129,6 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *RootModel) refreshTableData() {
 	snaps := m.store.Snapshot()
 
-	// Apply start domain filter query strings if actively initialized
 	if m.domainFilter != "" {
 		var filtered []store.DomainSnapshot
 		for _, s := range snaps {
@@ -230,7 +228,6 @@ func (m RootModel) View() string {
 	footerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#707070")).Italic(true)
 	modalStyle := lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("#FFAF00")).Padding(1, 3).Background(lipgloss.Color("#1C1C1C")).Width(70)
 
-	// 1. Render Help Overlay Modal
 	if m.showHelp {
 		helpContent := lipgloss.JoinVertical(
 			lipgloss.Left,
@@ -251,7 +248,6 @@ func (m RootModel) View() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modalStyle.Render(helpContent))
 	}
 
-	// 2. Render Log Overlay Modal
 	if m.showLogs {
 		logLines := GlobalLogRing.GetTail(15)
 		logBoxContent := lipgloss.JoinVertical(

@@ -17,25 +17,38 @@ import (
 	"hyperview/internal/store"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/prometheus/procfs"
+	"golang.org/x/sys/unix"
 )
+
+type bpfLink interface {
+	Close() error
+}
+
+type legacyLink struct {
+	fd int
+}
+
+func (l *legacyLink) Close() error {
+	_, _, _ = unix.Syscall(unix.SYS_IOCTL, uintptr(l.fd), unix.PERF_EVENT_IOC_DISABLE, 0)
+	return unix.Close(l.fd)
+}
 
 type EBPFCollector struct {
 	mu          sync.Mutex
 	objs        bpf.KvmEventsObjects
-	links       []link.Link
+	links       []bpfLink
 	enabled     bool
 	errStatus   string
 	pidToDomID  map[uint32]string
-	domainExits map[string]map[uint32]uint64 // FIX: Clean type declaration without 'make'
+	domainExits map[string]map[uint32]uint64
 }
 
 func NewEBPFCollector() *EBPFCollector {
 	ec := &EBPFCollector{
 		pidToDomID:  make(map[uint32]string),
-		domainExits: make(map[string]map[uint32]uint64), // Initialized correctly here
+		domainExits: make(map[string]map[uint32]uint64),
 	}
 
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -57,37 +70,65 @@ func NewEBPFCollector() *EBPFCollector {
 		return ec
 	}
 
-	// Attach raw exit link
-	l1, err := link.AttachRawTracepoint(link.RawTracepointOptions{
-		Name:    "kvm_exit",
-		Program: objs.HandleKvmExit,
-	})
-	if err != nil {
+	if err := ec.attachTracepointLegacy("kvm", "kvm_exit", objs.HandleKvmExit); err != nil {
 		objs.Close()
-		ec.errStatus = fmt.Sprintf("raw exit tracepoint link hook fail: %v", err)
+		ec.errStatus = fmt.Sprintf("legacy exit tracepoint attachment fail: %v", err)
 		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
 		return ec
 	}
-	ec.links = append(ec.links, l1)
 
-	// Attach raw entry link
-	l2, err := link.AttachRawTracepoint(link.RawTracepointOptions{
-		Name:    "kvm_entry",
-		Program: objs.HandleKvmEntry,
-	})
-	if err != nil {
-		l1.Close()
+	if err := ec.attachTracepointLegacy("kvm", "kvm_entry", objs.HandleKvmEntry); err != nil {
+		ec.Close()
 		objs.Close()
-		ec.errStatus = fmt.Sprintf("raw entry tracepoint link hook fail: %v", err)
+		ec.errStatus = fmt.Sprintf("legacy entry tracepoint attachment fail: %v", err)
 		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
 		return ec
 	}
-	ec.links = append(ec.links, l2)
 
 	ec.objs = objs
 	ec.enabled = true
-	slog.Info("eBPF raw architecture kernel link engine cleanly deployed")
+	slog.Info("eBPF legacy tracepoint link engine safely deployed")
 	return ec
+}
+
+func (ec *EBPFCollector) attachTracepointLegacy(category, name string, prog *ebpf.Program) error {
+	for _, base := range []string{"/sys/kernel/tracing", "/sys/kernel/debug/tracing"} {
+		idPath := fmt.Sprintf("%s/events/%s/%s/id", base, category, name)
+		data, err := os.ReadFile(idPath)
+		if err != nil {
+			continue
+		}
+		var id int
+		if _, err := fmt.Sscanf(string(bytes.TrimSpace(data)), "%d", &id); err != nil {
+			return err
+		}
+
+		attr := &unix.PerfEventAttr{
+			Type:   unix.PERF_TYPE_TRACEPOINT,
+			Config: uint64(id),
+		}
+
+		fd, err := unix.PerfEventOpen(attr, -1, 0, -1, unix.PERF_FLAG_FD_CLOEXEC)
+		if err != nil {
+			return err
+		}
+
+		_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.PERF_EVENT_IOC_SET_BPF, uintptr(prog.FD()))
+		if errno != 0 {
+			_ = unix.Close(fd)
+			return errno
+		}
+
+		_, _, errno = unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.PERF_EVENT_IOC_ENABLE, 0)
+		if errno != 0 {
+			_ = unix.Close(fd)
+			return errno
+		}
+
+		ec.links = append(ec.links, &legacyLink{fd: fd})
+		return nil
+	}
+	return fmt.Errorf("tracepoint source path %s/%s missing", category, name)
 }
 
 func (ec *EBPFCollector) Name() string { return "ebpf" }
@@ -136,7 +177,6 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 		}
 	}
 
-	// 1. Iterate through the global Hash map directly into our tracker cache
 	var (
 		reasonKey uint32
 		exitCount uint64
@@ -153,7 +193,6 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 		}
 	}
 
-	// 2. Stream real, un-falsified counters into the domain store
 	for mainPID, domID := range ec.pidToDomID {
 		for _, snap := range snapshots {
 			if snap.ID == domID {
@@ -166,7 +205,6 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 					}
 				}
 
-				// Read real thread identities matching "CPU <n>/KVM" to fix core layout mapping shifts
 				taskPath := fmt.Sprintf("/proc/%d/task", mainPID)
 				entries, err := os.ReadDir(taskPath)
 				if err == nil {

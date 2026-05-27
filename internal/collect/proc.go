@@ -85,7 +85,6 @@ func (pc *ProcCollector) findOrCreatePid(domainName string) (int, error) {
 			if strings.Contains(arg, "qemu") {
 				isQemu = true
 			}
-			// FIX: Applied synchronized command token parsing checks
 			if (arg == "-name" || arg == "-domain") && i+1 < len(cmdline) {
 				val := cmdline[i+1]
 				if val == domainName || val == "guest="+domainName || strings.HasPrefix(val, "guest="+domainName+",") {

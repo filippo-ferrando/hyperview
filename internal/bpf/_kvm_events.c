@@ -33,18 +33,19 @@ struct {
   __type(value, struct vcpu_metrics);
 } vcpu_stats SEC(".maps");
 
-SEC("raw_tracepoint/kvm_exit")
-int handle_kvm_exit(struct bpf_raw_tracepoint_args *ctx) {
+// USING STANDARD TRACEPOINTS TO EXTRACT FIXED FIELD DATA INDEPENDENT OF MODULE
+// SYMBOLS
+SEC("tp/kvm/kvm_exit")
+int handle_kvm_exit(struct trace_event_raw_kvm_exit *ctx) {
   __u32 tgid = bpf_get_current_pid_tgid() >> 32;
   __u32 tid = (__u32)bpf_get_current_pid_tgid();
 
   if (!bpf_map_lookup_elem(&target_pids, &tgid))
     return 0;
 
-  // exit_reason!
-  __u32 exit_reason = (__u32)ctx->args[2];
+  // Read the exit reason directly from the stable tracepoint context field
+  __u32 exit_reason = ctx->exit_reason;
 
-  // Aggregate real exit counters atomically into the global histogram map
   __u64 one = 1, *cnt;
   cnt = bpf_map_lookup_elem(&exit_counts, &exit_reason);
   if (cnt) {
@@ -53,7 +54,6 @@ int handle_kvm_exit(struct bpf_raw_tracepoint_args *ctx) {
     bpf_map_update_elem(&exit_counts, &exit_reason, &one, BPF_ANY);
   }
 
-  // Log exit event times for this specific vCPU thread context
   struct vcpu_metrics *m = bpf_map_lookup_elem(&vcpu_stats, &tid);
   if (m) {
     m->exit_count++;
@@ -67,15 +67,14 @@ int handle_kvm_exit(struct bpf_raw_tracepoint_args *ctx) {
   return 0;
 }
 
-SEC("raw_tracepoint/kvm_entry")
-int handle_kvm_entry(struct bpf_raw_tracepoint_args *ctx) {
+SEC("tp/kvm/kvm_entry")
+int handle_kvm_entry(struct trace_event_raw_kvm_entry *ctx) {
   __u32 tgid = bpf_get_current_pid_tgid() >> 32;
   __u32 tid = (__u32)bpf_get_current_pid_tgid();
 
   if (!bpf_map_lookup_elem(&target_pids, &tgid))
     return 0;
 
-  // Compute real scheduling latency (time spent waiting in host kernel context)
   struct vcpu_metrics *m = bpf_map_lookup_elem(&vcpu_stats, &tid);
   if (m && m->last_exit_ts > 0) {
     __u64 delta = bpf_ktime_get_ns() - m->last_exit_ts;

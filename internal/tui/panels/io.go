@@ -15,7 +15,6 @@ func RenderIOPanel(snap store.DomainSnapshot) string {
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render("Storage Block Device Disk I/O Matrix") + "\n\n")
 
-	// FIX: Move newline outside Render block to maintain precise left-alignment tracking
 	sb.WriteString(lipgloss.NewStyle().Bold(true).Render("Attached Devices") + "\n")
 	if len(snap.Disks) == 0 {
 		sb.WriteString(" No virtual block storage disks detected.\n")
