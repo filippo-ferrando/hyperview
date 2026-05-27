@@ -8,9 +8,17 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
+
+type KvmEventsVcpuMetrics struct {
+	_           structs.HostLayout
+	ExitCount   uint64
+	LastExitTs  uint64
+	TotalWaitNs uint64
+}
 
 // LoadKvmEvents returns the embedded CollectionSpec for KvmEvents.
 func LoadKvmEvents() (*ebpf.CollectionSpec, error) {
@@ -55,8 +63,8 @@ type KvmEventsSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type KvmEventsProgramSpecs struct {
 	HandleKvmDirtyRingPush *ebpf.ProgramSpec `ebpf:"handle_kvm_dirty_ring_push"`
+	HandleKvmEntry         *ebpf.ProgramSpec `ebpf:"handle_kvm_entry"`
 	HandleKvmExit          *ebpf.ProgramSpec `ebpf:"handle_kvm_exit"`
-	HandleKvmHaltPollNs    *ebpf.ProgramSpec `ebpf:"handle_kvm_halt_poll_ns"`
 	HandleKvmInjVirq       *ebpf.ProgramSpec `ebpf:"handle_kvm_inj_virq"`
 	HandleKvmMmuPageFault  *ebpf.ProgramSpec `ebpf:"handle_kvm_mmu_page_fault"`
 	HandleMmFaultKprobe    *ebpf.ProgramSpec `ebpf:"handle_mm_fault_kprobe"`
@@ -67,8 +75,8 @@ type KvmEventsProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type KvmEventsMapSpecs struct {
 	ExitCounts *ebpf.MapSpec `ebpf:"exit_counts"`
-	KvmEvents  *ebpf.MapSpec `ebpf:"kvm_events"`
 	TargetPids *ebpf.MapSpec `ebpf:"target_pids"`
+	VcpuStats  *ebpf.MapSpec `ebpf:"vcpu_stats"`
 }
 
 // KvmEventsVariableSpecs contains global variables before they are loaded into the kernel.
@@ -98,15 +106,15 @@ func (o *KvmEventsObjects) Close() error {
 // It can be passed to LoadKvmEventsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type KvmEventsMaps struct {
 	ExitCounts *ebpf.Map `ebpf:"exit_counts"`
-	KvmEvents  *ebpf.Map `ebpf:"kvm_events"`
 	TargetPids *ebpf.Map `ebpf:"target_pids"`
+	VcpuStats  *ebpf.Map `ebpf:"vcpu_stats"`
 }
 
 func (m *KvmEventsMaps) Close() error {
 	return _KvmEventsClose(
 		m.ExitCounts,
-		m.KvmEvents,
 		m.TargetPids,
+		m.VcpuStats,
 	)
 }
 
@@ -121,8 +129,8 @@ type KvmEventsVariables struct {
 // It can be passed to LoadKvmEventsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type KvmEventsPrograms struct {
 	HandleKvmDirtyRingPush *ebpf.Program `ebpf:"handle_kvm_dirty_ring_push"`
+	HandleKvmEntry         *ebpf.Program `ebpf:"handle_kvm_entry"`
 	HandleKvmExit          *ebpf.Program `ebpf:"handle_kvm_exit"`
-	HandleKvmHaltPollNs    *ebpf.Program `ebpf:"handle_kvm_halt_poll_ns"`
 	HandleKvmInjVirq       *ebpf.Program `ebpf:"handle_kvm_inj_virq"`
 	HandleKvmMmuPageFault  *ebpf.Program `ebpf:"handle_kvm_mmu_page_fault"`
 	HandleMmFaultKprobe    *ebpf.Program `ebpf:"handle_mm_fault_kprobe"`
@@ -131,8 +139,8 @@ type KvmEventsPrograms struct {
 func (p *KvmEventsPrograms) Close() error {
 	return _KvmEventsClose(
 		p.HandleKvmDirtyRingPush,
+		p.HandleKvmEntry,
 		p.HandleKvmExit,
-		p.HandleKvmHaltPollNs,
 		p.HandleKvmInjVirq,
 		p.HandleKvmMmuPageFault,
 		p.HandleMmFaultKprobe,

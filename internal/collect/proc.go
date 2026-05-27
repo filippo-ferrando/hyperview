@@ -1,3 +1,4 @@
+// internal/collect/proc.go
 package collect
 
 import (
@@ -28,13 +29,8 @@ func NewProcCollector() (*ProcCollector, error) {
 	}, nil
 }
 
-func (pc *ProcCollector) Name() string {
-	return "proc"
-}
-
-func (pc *ProcCollector) Close() error {
-	return nil
-}
+func (pc *ProcCollector) Name() string { return "proc" }
+func (pc *ProcCollector) Close() error { return nil }
 
 func (pc *ProcCollector) Collect(ctx context.Context, s *store.DomainStore) error {
 	pc.mu.Lock()
@@ -89,8 +85,10 @@ func (pc *ProcCollector) findOrCreatePid(domainName string) (int, error) {
 			if strings.Contains(arg, "qemu") {
 				isQemu = true
 			}
+			// FIX: Applied synchronized command token parsing checks
 			if (arg == "-name" || arg == "-domain") && i+1 < len(cmdline) {
-				if strings.HasPrefix(cmdline[i+1], "guest="+domainName+",") || cmdline[i+1] == domainName {
+				val := cmdline[i+1]
+				if val == domainName || val == "guest="+domainName || strings.HasPrefix(val, "guest="+domainName+",") {
 					isTargetDomain = true
 				}
 			}
@@ -101,6 +99,5 @@ func (pc *ProcCollector) findOrCreatePid(domainName string) (int, error) {
 			return p.PID, nil
 		}
 	}
-
 	return 0, os.ErrNotExist
 }

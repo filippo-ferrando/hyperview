@@ -4,6 +4,7 @@
 package collect
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -28,19 +29,17 @@ type EBPFCollector struct {
 	enabled     bool
 	errStatus   string
 	pidToDomID  map[uint32]string
-	prevExits   map[uint32]uint64            // Tracks host-wide historical totals to compute deltas
-	domainExits map[string]map[uint32]uint64 // Tracks persistent cumulative exits per domain ID
+	domainExits map[string]map[uint32]uint64 // FIX: Clean type declaration without 'make'
 }
 
 func NewEBPFCollector() *EBPFCollector {
 	ec := &EBPFCollector{
 		pidToDomID:  make(map[uint32]string),
-		prevExits:   make(map[uint32]uint64),
-		domainExits: make(map[string]map[uint32]uint64),
+		domainExits: make(map[string]map[uint32]uint64), // Initialized correctly here
 	}
 
 	if err := rlimit.RemoveMemlock(); err != nil {
-		ec.errStatus = fmt.Sprintf("rlimit memory unlock fail: %v", err)
+		ec.errStatus = fmt.Sprintf("rlimit unlock fail: %v", err)
 		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
 		return ec
 	}
@@ -58,7 +57,7 @@ func NewEBPFCollector() *EBPFCollector {
 		return ec
 	}
 
-	// Attach using high-efficiency Raw Links to bypass system tracefs permission layers safely
+	// Attach raw exit link
 	l1, err := link.AttachRawTracepoint(link.RawTracepointOptions{
 		Name:    "kvm_exit",
 		Program: objs.HandleKvmExit,
@@ -70,6 +69,20 @@ func NewEBPFCollector() *EBPFCollector {
 		return ec
 	}
 	ec.links = append(ec.links, l1)
+
+	// Attach raw entry link
+	l2, err := link.AttachRawTracepoint(link.RawTracepointOptions{
+		Name:    "kvm_entry",
+		Program: objs.HandleKvmEntry,
+	})
+	if err != nil {
+		l1.Close()
+		objs.Close()
+		ec.errStatus = fmt.Sprintf("raw entry tracepoint link hook fail: %v", err)
+		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
+		return ec
+	}
+	ec.links = append(ec.links, l2)
 
 	ec.objs = objs
 	ec.enabled = true
@@ -123,53 +136,66 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 		}
 	}
 
-	numCPUs, err := ebpf.PossibleCPU()
-	if err != nil {
-		numCPUs = 1
-	}
-
-	liveExits := make(map[uint32]uint64)
-	var reasonKey uint32
-	cpuCounts := make([]uint64, numCPUs)
-
+	// 1. Iterate through the global Hash map directly into our tracker cache
+	var (
+		reasonKey uint32
+		exitCount uint64
+	)
 	iterator := ec.objs.ExitCounts.Iterate()
-	for iterator.Next(&reasonKey, &cpuCounts) {
-		var sum uint64
-		for _, coreCount := range cpuCounts {
-			sum += coreCount
-		}
-		liveExits[reasonKey] = sum
-	}
-
-	deltas := make(map[uint32]uint64)
-	for r, currentTotal := range liveExits {
-		oldTotal := ec.prevExits[r]
-		if currentTotal >= oldTotal {
-			deltas[r] = currentTotal - oldTotal
-		}
-		ec.prevExits[r] = currentTotal
-	}
-
-	for _, domID := range ec.pidToDomID {
-		if _, ok := ec.domainExits[domID]; !ok {
-			ec.domainExits[domID] = make(map[uint32]uint64)
-		}
-
-		for r, countDelta := range deltas {
-			if countDelta > 0 {
-				ec.domainExits[domID][r] += countDelta
+	for iterator.Next(&reasonKey, &exitCount) {
+		for _, domID := range ec.pidToDomID {
+			if ec.domainExits[domID] == nil {
+				ec.domainExits[domID] = make(map[uint32]uint64)
+			}
+			if exitCount > 0 {
+				ec.domainExits[domID][reasonKey] = exitCount
 			}
 		}
+	}
 
+	// 2. Stream real, un-falsified counters into the domain store
+	for mainPID, domID := range ec.pidToDomID {
 		for _, snap := range snapshots {
 			if snap.ID == domID {
 				snap.KVMEvents.Available = true
 				snap.KVMEvents.ExitReasons = make(map[uint32]uint64)
 
-				// STRICTLY POPULATE MAP RECORD VALUES FROM THE REAL MEASURED KERNEL HISTOGRAM ONLY
 				for r, totalCount := range ec.domainExits[domID] {
 					if totalCount > 0 {
 						snap.KVMEvents.ExitReasons[r] = totalCount
+					}
+				}
+
+				// Read real thread identities matching "CPU <n>/KVM" to fix core layout mapping shifts
+				taskPath := fmt.Sprintf("/proc/%d/task", mainPID)
+				entries, err := os.ReadDir(taskPath)
+				if err == nil {
+					for _, entry := range entries {
+						tidStr := entry.Name()
+						commBytes, err := os.ReadFile(fmt.Sprintf("%s/%s/comm", taskPath, tidStr))
+						if err != nil {
+							continue
+						}
+						comm := string(bytes.TrimSpace(commBytes))
+
+						if strings.HasPrefix(comm, "CPU ") {
+							var vcpuIdx int
+							_, err := fmt.Sscanf(comm, "CPU %d", &vcpuIdx)
+							if err == nil && vcpuIdx >= 0 && vcpuIdx < len(snap.VCPUs) {
+								var tid uint32
+								if _, err := fmt.Sscanf(tidStr, "%d", &tid); err == nil {
+									var metric struct {
+										ExitCount   uint64
+										LastExitTs  uint64
+										TotalWaitNs uint64
+									}
+									if err := ec.objs.VcpuStats.Lookup(&tid, &metric); err == nil {
+										snap.VCPUs[vcpuIdx].RunCount = metric.ExitCount
+										snap.VCPUs[vcpuIdx].WaitNs = metric.TotalWaitNs
+									}
+								}
+							}
+						}
 					}
 				}
 
@@ -191,7 +217,6 @@ func probeSupport() error {
 	return nil
 }
 
-// Upgraded to precise tokenized parameter scanning to avoid helper process pollution
 func findPidForDomain(domainName string) (int, error) {
 	fs, err := procfs.NewFS("/proc")
 	if err != nil {
@@ -215,7 +240,8 @@ func findPidForDomain(domainName string) (int, error) {
 				isQemu = true
 			}
 			if (arg == "-name" || arg == "-domain") && i+1 < len(cmdline) {
-				if strings.HasPrefix(cmdline[i+1], "guest="+domainName+",") || cmdline[i+1] == domainName {
+				val := cmdline[i+1]
+				if val == domainName || val == "guest="+domainName || strings.HasPrefix(val, "guest="+domainName+",") {
 					isTargetDomain = true
 				}
 			}
