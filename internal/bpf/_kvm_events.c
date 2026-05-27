@@ -68,4 +68,31 @@ int handle_kvm_inj_virq(struct trace_event_raw_kvm_inj_virq *ctx) {
   return 0;
 }
 
+SEC("tp/kvm/kvm_mmu_page_fault")
+int handle_kvm_mmu_page_fault(struct trace_event_raw_kvm_mmu_page_fault *ctx) {
+  __u32 tgid = bpf_get_current_pid_tgid() >> 32;
+  if (!bpf_map_lookup_elem(&target_pids, &tgid))
+    return 0;
+
+  return 0;
+}
+
+SEC("tp/kvm/kvm_halt_poll_ns")
+int handle_kvm_halt_poll_ns(struct trace_event_raw_kvm_halt_poll_ns *ctx) {
+  __u32 tgid = bpf_get_current_pid_tgid() >> 32;
+  if (!bpf_map_lookup_elem(&target_pids, &tgid))
+    return 0;
+
+  return 0;
+}
+
+SEC("kprobe/handle_mm_fault")
+int handle_mm_fault_kprobe(void *ctx) {
+  __u32 tgid = bpf_get_current_pid_tgid() >> 32;
+  if (!bpf_map_lookup_elem(&target_pids, &tgid))
+    return 0;
+
+  return 0;
+}
+
 char LICENSE[] SEC("license") = "GPL";

@@ -22,6 +22,9 @@ func RenderCPUPanel(snap store.DomainSnapshot, width int) string {
 		maxBarWidth = 10
 	}
 
+	waitLabelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#707070")).Italic(true)
+	waitValueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#E5A93C"))
+
 	for _, vcpu := range snap.VCPUs {
 		pct := vcpu.CPUPercent
 		if pct > 100.0 {
@@ -36,6 +39,25 @@ func RenderCPUPanel(snap store.DomainSnapshot, width int) string {
 		empty := lipgloss.NewStyle().Foreground(lipgloss.Color("#303030")).Render(strings.Repeat("░", maxBarWidth-filledLength))
 
 		sb.WriteString(fmt.Sprintf(" vCPU #%-2d [%s%s] %5.1f%%\n", vcpu.Index, bar, empty, vcpu.CPUPercent))
+
+		// Render extra halt-poll details directly beneath the main activity rows
+		if vcpu.WaitNs > 0 || vcpu.RunCount > 0 {
+			sb.WriteString(fmt.Sprintf(
+				"         %s Total Wait: %s ms | Exits/Runs: %s\n",
+				waitLabelStyle.Render("↳"),
+				waitValueStyle.Render(fmt.Sprintf("%.2f", float64(vcpu.WaitNs)/1000000.0)),
+				waitValueStyle.Render(fmt.Sprintf("%d", vcpu.RunCount)),
+			))
+		}
+	}
+
+	// Append global cumulative halt-polling metrics if active
+	if snap.KVMEvents.Available && snap.KVMEvents.HaltPollNs > 0 {
+		sb.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5F5FDF")).Bold(true).Render(fmt.Sprintf(
+			" Cumulative KVM Guest Halt-Polling Penalty: %d µs (MMIO Exits: %d)",
+			snap.KVMEvents.HaltPollNs/1000,
+			snap.KVMEvents.MMIOExits,
+		)) + "\n")
 	}
 
 	return sb.String()

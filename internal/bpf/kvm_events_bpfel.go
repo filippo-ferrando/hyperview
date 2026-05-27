@@ -12,8 +12,11 @@ type KvmEventsObjects struct {
 }
 
 type KvmEventsPrograms struct {
-	HandleKvmExit    *ebpf.Program `ebpf:"handle_kvm_exit"`
-	HandleKvmInjVirq *ebpf.Program `ebpf:"handle_kvm_inj_virq"`
+	HandleKvmExit         *ebpf.Program `ebpf:"handle_kvm_exit"`
+	HandleKvmInjVirq      *ebpf.Program `ebpf:"handle_kvm_inj_virq"`
+	HandleKvmMmuPageFault *ebpf.Program `ebpf:"handle_kvm_mmu_page_fault"`
+	HandleKvmHaltPollNs   *ebpf.Program `ebpf:"handle_kvm_halt_poll_ns"`
+	HandleMmFaultKprobe   *ebpf.Program `ebpf:"handle_mm_fault_kprobe"`
 }
 
 type KvmEventsMaps struct {
@@ -25,6 +28,7 @@ type KvmEventsMaps struct {
 func (o *KvmEventsObjects) Close() error {
 	closers := []interface{ Close() error }{
 		o.HandleKvmExit, o.HandleKvmInjVirq,
+		o.HandleKvmMmuPageFault, o.HandleKvmHaltPollNs, o.HandleMmFaultKprobe,
 		o.KvmEvents, o.ExitCounts, o.TargetPids,
 	}
 	for _, c := range closers {
@@ -43,8 +47,11 @@ func LoadKvmEventsObjects(obj *KvmEventsObjects, opts *ebpf.CollectionOptions) e
 			"target_pids": {Type: ebpf.Hash, KeySize: 4, ValueSize: 1, MaxEntries: 256},
 		},
 		Programs: map[string]*ebpf.ProgramSpec{
-			"handle_kvm_exit":     {Type: ebpf.TracePoint, License: "GPL"},
-			"handle_kvm_inj_virq": {Type: ebpf.TracePoint, License: "GPL"},
+			"handle_kvm_exit":           {Type: ebpf.TracePoint, License: "GPL"},
+			"handle_kvm_inj_virq":       {Type: ebpf.TracePoint, License: "GPL"},
+			"handle_kvm_mmu_page_fault": {Type: ebpf.TracePoint, License: "GPL"},
+			"handle_kvm_halt_poll_ns":   {Type: ebpf.TracePoint, License: "GPL"},
+			"handle_mm_fault_kprobe":    {Type: ebpf.Kprobe, License: "GPL"},
 		},
 	}
 	return spec.LoadAndAssign(obj, opts)
