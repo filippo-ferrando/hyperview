@@ -21,7 +21,6 @@ func main() {
 	domainStore := store.NewDomainStore()
 	registry := collect.NewRegistry()
 
-	// Register live polling integrations
 	registry.Register(collect.NewLibvirtCollector("/var/run/libvirt/libvirt-sock"))
 
 	procColl, err := collect.NewProcCollector()
@@ -31,11 +30,12 @@ func main() {
 		log.Printf("Warning: Host OS procfs collection engine offline: %v", err)
 	}
 
-	// Data collection tick runner running asynchronously
+	// Register low-overhead kernel tracing eBPF collector
+	registry.Register(collect.NewEBPFCollector())
+
 	go func() {
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
-
 		for {
 			select {
 			case <-ctx.Done():
@@ -48,7 +48,6 @@ func main() {
 		}
 	}()
 
-	// Instantiate full Phase 1 composite matrix
 	p := tea.NewProgram(tui.NewRootModel(domainStore), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		log.Printf("Fatal runtime TUI crash: %v", err)

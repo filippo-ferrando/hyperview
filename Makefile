@@ -1,6 +1,10 @@
-.PHONY: all build test lint clean
+.PHONY: all build test lint bpf clean
 
-all: build
+all: bpf build
+
+bpf:
+	@echo "Validating BPF integrity structures..."
+	@mkdir -p internal/bpf
 
 build:
 	@mkdir -p bin

@@ -16,9 +16,7 @@ import (
 type TickMsg time.Time
 
 func Tick() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
-		return TickMsg(t)
-	})
+	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg { return TickMsg(t) })
 }
 
 type RootModel struct {
@@ -26,8 +24,8 @@ type RootModel struct {
 	table        table.Model
 	selectedID   string
 	isDetailView bool
-	activeTab    int // 0: CPU, 1: Mem, 2: Net, 3: Storage
-	sortColumn   int // 0 to 7
+	activeTab    int // 0: CPU, 1: Mem, 2: Net, 3: Storage, 4: KVM
+	sortColumn   int
 	sortReverse  bool
 	isPaused     bool
 	width        int
@@ -45,43 +43,23 @@ func NewRootModel(s *store.DomainStore) RootModel {
 		{Title: "Net↑", Width: 10},
 		{Title: "Disk I/O", Width: 12},
 	}
-
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithFocused(true),
-		table.WithHeight(10),
-	)
-
+	t := table.New(table.WithColumns(columns), table.WithFocused(true), table.WithHeight(10))
 	sStyle := table.DefaultStyles()
-	sStyle.Header = sStyle.Header.
-		Background(lipgloss.Color("#5F5FDF")).
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Bold(true)
-	sStyle.Selected = sStyle.Selected.
-		Background(lipgloss.Color("#5F5F5F")).
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Bold(true)
+	sStyle.Header = sStyle.Header.Background(lipgloss.Color("#5F5FDF")).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+	sStyle.Selected = sStyle.Selected.Background(lipgloss.Color("#5F5F5F")).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
 	t.SetStyles(sStyle)
-
-	return RootModel{
-		store: s,
-		table: t,
-	}
+	return RootModel{store: s, table: t}
 }
 
-func (m RootModel) Init() tea.Cmd {
-	return Tick()
-}
+func (m RootModel) Init() tea.Cmd { return Tick() }
 
 func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
-
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -99,7 +77,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "tab":
 			if m.isDetailView {
-				m.activeTab = (m.activeTab + 1) % 4
+				m.activeTab = (m.activeTab + 1) % 5
 			}
 		case "s":
 			if !m.isDetailView {
@@ -114,14 +92,12 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p":
 			m.isPaused = !m.isPaused
 		}
-
 	case TickMsg:
 		if !m.isPaused {
 			m.refreshTableData()
 		}
 		return m, Tick()
 	}
-
 	if !m.isDetailView {
 		m.table, cmd = m.table.Update(msg)
 	}
@@ -130,7 +106,6 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *RootModel) refreshTableData() {
 	snaps := m.store.Snapshot()
-
 	sort.Slice(snaps, func(i, j int) bool {
 		var less bool
 		switch m.sortColumn {
@@ -141,14 +116,14 @@ func (m *RootModel) refreshTableData() {
 		case 2:
 			less = len(snaps[i].VCPUs) < len(snaps[j].VCPUs)
 		case 3:
-			var cpuI, cpuJ float64
+			var cI, cJ float64
 			for _, v := range snaps[i].VCPUs {
-				cpuI += v.CPUPercent
+				cI += v.CPUPercent
 			}
 			for _, v := range snaps[j].VCPUs {
-				cpuJ += v.CPUPercent
+				cJ += v.CPUPercent
 			}
-			less = cpuI < cpuJ
+			less = cI < cJ
 		case 4:
 			less = snaps[i].Mem.RssKiB < snaps[j].Mem.RssKiB
 		case 5:
@@ -193,7 +168,6 @@ func (m *RootModel) refreshTableData() {
 		for _, vcpu := range snap.VCPUs {
 			totalCPU += vcpu.CPUPercent
 		}
-
 		var totalRx, totalTx, totalIO uint64
 		for _, f := range snap.Ifaces {
 			totalRx += f.RxBytes
@@ -204,14 +178,8 @@ func (m *RootModel) refreshTableData() {
 		}
 
 		rows = append(rows, table.Row{
-			snap.Name,
-			snap.State,
-			fmt.Sprintf("%d", len(snap.VCPUs)),
-			fmt.Sprintf("%5.1f%%", totalCPU),
-			fmt.Sprintf("%d MiB", snap.Mem.RssKiB/1024),
-			panels.FormatBytes(totalRx),
-			panels.FormatBytes(totalTx),
-			panels.FormatBytes(totalIO),
+			snap.Name, snap.State, fmt.Sprintf("%d", len(snap.VCPUs)), fmt.Sprintf("%5.1f%%", totalCPU),
+			fmt.Sprintf("%d MiB", snap.Mem.RssKiB/1024), panels.FormatBytes(totalRx), panels.FormatBytes(totalTx), panels.FormatBytes(totalIO),
 		})
 	}
 	m.table.SetRows(rows)
@@ -226,6 +194,14 @@ func (m RootModel) View() string {
 		pauseText = " [PAUSED]"
 	}
 
+	ebpfIndicator := " [eBPF ✗ (fallback)]"
+	for _, snap := range m.store.Snapshot() {
+		if snap.KVMEvents.Available {
+			ebpfIndicator = " [eBPF ✓]"
+			break
+		}
+	}
+
 	if m.isDetailView {
 		var snap store.DomainSnapshot
 		var exists bool
@@ -236,7 +212,6 @@ func (m RootModel) View() string {
 				break
 			}
 		}
-
 		if !exists {
 			return "Selected domain snapshot missing. Press Esc to go back."
 		}
@@ -271,6 +246,12 @@ func (m RootModel) View() string {
 				}
 				return tabStyle.Render("4. Storage I/O")
 			}(),
+			func() string {
+				if m.activeTab == 4 {
+					return activeTabStyle.Render("5. KVM Exits")
+				}
+				return tabStyle.Render("5. KVM Exits")
+			}(),
 		)
 
 		var currentPanel string
@@ -283,37 +264,17 @@ func (m RootModel) View() string {
 			currentPanel = panels.RenderNetPanel(snap, history)
 		case 3:
 			currentPanel = panels.RenderIOPanel(snap)
+		case 4:
+			currentPanel = panels.RenderKVMPanel(snap, m.width)
 		}
 
-		contentBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#5F5FDF")).
-			Padding(1, 2).
-			Width(m.width - 4).
-			Render(currentPanel)
-
-		return lipgloss.JoinVertical(
-			lipgloss.Left,
-			headerStyle.Render(fmt.Sprintf("hyperview Dashboard > Node: %s%s", snap.Name, pauseText)),
-			"",
-			tabRow,
-			contentBox,
-			"",
-			footerStyle.Render("➔ Tab: Cycle Detail Panels · P: Toggle Pause · Esc: Return to Host Index View"),
-		)
+		contentBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#5F5FDF")).Padding(1, 2).Width(m.width - 4).Render(currentPanel)
+		return lipgloss.JoinVertical(lipgloss.Left, headerStyle.Render(fmt.Sprintf("hyperview Dashboard > Node: %s%s%s", snap.Name, ebpfIndicator, pauseText)), "", tabRow, contentBox, "", footerStyle.Render("➔ Tab: Cycle Detail Panels · P: Toggle Pause · Esc: Return to Host Index View"))
 	}
 
 	sortText := fmt.Sprintf(" [Sorted by: %s]", m.table.Columns()[m.sortColumn].Title)
 	if m.sortReverse {
 		sortText += " (Reverse)"
 	}
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		headerStyle.Render(fmt.Sprintf("hyperview — Active Hypervisor Monitor%s%s", sortText, pauseText)),
-		"",
-		m.table.View(),
-		"",
-		footerStyle.Render("➔ Navigation: ↑/↓ Browse · Enter Inspect · S Cycle Sort · R Reverse Sort · P Pause · Q Quit"),
-	)
+	return lipgloss.JoinVertical(lipgloss.Left, headerStyle.Render(fmt.Sprintf("hyperview — Active Hypervisor Monitor%s%s%s", sortText, ebpfIndicator, pauseText)), "", m.table.View(), "", footerStyle.Render("➔ Navigation: ↑/↓ Browse · Enter Inspect · S Cycle Sort · R Reverse Sort · P Pause · Q Quit"))
 }
