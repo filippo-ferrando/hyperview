@@ -37,16 +37,16 @@ type MemStat struct {
 
 type IfaceStat struct {
 	Name    string
-	RxBytes uint64
-	TxBytes uint64
+	RxBytes uint64 // throughput delta per tick
+	TxBytes uint64 // throughput delta per tick
 	RxPkts  uint64
 	TxPkts  uint64
 }
 
 type DiskStat struct {
 	Dev     string
-	RdBytes uint64
-	WrBytes uint64
+	RdBytes uint64 // throughput delta per tick
+	WrBytes uint64 // throughput delta per tick
 	RdReqs  uint64
 	WrReqs  uint64
 }
@@ -67,6 +67,12 @@ type MigrationStat struct {
 	MbpsDown       float64
 	ExpectedDownMs uint64
 	TotalTimeMs    uint64
+}
+
+type DomainHistory struct {
+	CPU []float64
+	RX  []uint64
+	TX  []uint64
 }
 
 type DomainStore struct {
@@ -100,6 +106,22 @@ func (s *DomainStore) Update(snap DomainSnapshot) {
 		}
 		s.domains[snap.ID] = entry
 	}
+
+	// Persist arrays across intermittent multi-collector updates
+	if len(snap.Ifaces) == 0 && len(entry.latest.Ifaces) > 0 {
+		snap.Ifaces = entry.latest.Ifaces
+	}
+	if len(snap.Disks) == 0 && len(entry.latest.Disks) > 0 {
+		snap.Disks = entry.latest.Disks
+	}
+	if len(snap.VCPUs) == 0 && len(entry.latest.VCPUs) > 0 {
+		snap.VCPUs = entry.latest.VCPUs
+	}
+	if snap.Mem.AllocKiB == 0 && entry.latest.Mem.AllocKiB > 0 {
+		snap.Mem.AllocKiB = entry.latest.Mem.AllocKiB
+		snap.Mem.AvailableKiB = entry.latest.Mem.AvailableKiB
+	}
+
 	entry.latest = snap
 
 	var totalCPU float64
@@ -107,6 +129,14 @@ func (s *DomainStore) Update(snap DomainSnapshot) {
 		totalCPU += vcpu.CPUPercent
 	}
 	entry.cpuHist.Push(totalCPU)
+
+	var totalRx, totalTx uint64
+	for _, iface := range snap.Ifaces {
+		totalRx += iface.RxBytes
+		totalTx += iface.TxBytes
+	}
+	entry.rxHist.Push(totalRx)
+	entry.txHist.Push(totalTx)
 }
 
 func (s *DomainStore) Snapshot() []DomainSnapshot {
@@ -129,4 +159,19 @@ func (s *DomainStore) Get(id DomainID) (DomainSnapshot, bool) {
 		return DomainSnapshot{}, false
 	}
 	return entry.latest, true
+}
+
+func (s *DomainStore) History(id DomainID) DomainHistory {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entry, exists := s.domains[id]
+	if !exists {
+		return DomainHistory{}
+	}
+	return DomainHistory{
+		CPU: entry.cpuHist.Slice(),
+		RX:  entry.rxHist.Slice(),
+		TX:  entry.txHist.Slice(),
+	}
 }
