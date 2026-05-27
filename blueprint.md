@@ -1,4 +1,4 @@
-# kvmtop — project blueprint
+# hyperview — project blueprint
 
 > A Go-native, htop-style TUI for monitoring KVM/libvirt virtual machines in real time.  
 > Target platforms: RHEL-compatible (8.6+, 9.x) · Ubuntu 20.04+ / Debian derivatives.
@@ -64,10 +64,10 @@
 ## 3. Repository layout
 
 ```
-kvmtop/
+hyperview/
 │
 ├── cmd/
-│   └── kvmtop/
+│   └── hyperview/
 │       └── main.go                  # flag parsing, wiring, signal handling
 │
 ├── internal/
@@ -634,7 +634,7 @@ Sparklines use Unicode block characters (`▁▂▃▄▅▆▇█`) computed fr
 
 | Task | Detail |
 |---|---|
-| Structured logging (`log/slog`) | Log to `~/.local/share/kvmtop/kvmtop.log`, not stdout |
+| Structured logging (`log/slog`) | Log to `~/.local/share/hyperview/kvmtop.log`, not stdout |
 | `--log-level` flag | debug / info / warn / error |
 | `--interval` flag | Override 250ms default |
 | `--domain` flag | Filter to specific domain on start |
@@ -679,43 +679,43 @@ BPF_OBJ   := internal/bpf/kvm_events_bpfel.go
 all: bpf build
 
 bpf:
-	clang -target bpf -O2 -g \
-	  -I internal/bpf \
-	  -c $(BPF_SRC) -o /dev/null   # validate only; bpf2go does real compile
-	go generate ./internal/bpf/...
+ clang -target bpf -O2 -g \
+   -I internal/bpf \
+   -c $(BPF_SRC) -o /dev/null   # validate only; bpf2go does real compile
+ go generate ./internal/bpf/...
 
 build:
-	CGO_ENABLED=0 go build \
-	  -ldflags="-X kvmtop/internal/version.Version=$$(git describe --tags)" \
-	  -o bin/kvmtop ./cmd/kvmtop
+ CGO_ENABLED=0 go build \
+   -ldflags="-X hyperview/internal/version.Version=$$(git describe --tags)" \
+   -o bin/hyperview ./cmd/kvmtop
 
 test:
-	go test ./...
+ go test ./...
 
 lint:
-	golangci-lint run
+ golangci-lint run
 
 package: rpm deb
 
 rpm:
-	nfpm package --packager rpm --target dist/
+ nfpm package --packager rpm --target dist/
 
 deb:
-	nfpm package --packager deb --target dist/
+ nfpm package --packager deb --target dist/
 
 clean:
-	rm -rf bin/ dist/ internal/bpf/*_bpf*.go internal/bpf/*.o
+ rm -rf bin/ dist/ internal/bpf/*_bpf*.go internal/bpf/*.o
 ```
 
 ### Runtime capability requirements
 
 ```ini
-# /etc/systemd/system/kvmtop.service
+# /etc/systemd/system/hyperview.service
 [Service]
-ExecStart=/usr/bin/kvmtop
+ExecStart=/usr/bin/hyperview
 AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_NET_ADMIN
 NoNewPrivileges=true
-User=kvmtop
+User=hyperview
 Group=libvirt
 ```
 
@@ -742,7 +742,7 @@ Group=libvirt
 |---|---|
 | **Multi-host support** | Add `--uri qemu+ssh://host/system` flag; libvirt already supports remote URIs |
 | **Guest-agent metrics** | CPU steal, filesystem stats via `qemu-guest-agent` — requires in-guest agent |
-| **Config file** | `~/.config/kvmtop/config.toml` for persistent column layout, color theme |
+| **Config file** | `~/.config/hyperview/config.toml` for persistent column layout, color theme |
 | **Export mode** | `--output json` for scripting / pipe to other tools |
 | **Prometheus exporter** | `--metrics-addr :9101` side-car mode |
 | **NUMA awareness** | Per-NUMA-node vCPU pinning display |
