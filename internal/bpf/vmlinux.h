@@ -23,6 +23,10 @@ struct __sk_buff;
 struct tcphdr;
 struct iphdr;
 
+struct bpf_raw_tracepoint_args {
+  __u64 args[0];
+};
+
 struct trace_event_raw_kvm_exit {
   unsigned short common_type;
   unsigned char common_flags;
@@ -34,7 +38,7 @@ struct trace_event_raw_kvm_exit {
   __u64 isa;
   __u64 info1;
   __u64 info2;
-};
+} __attribute__((preserve_access_index));
 
 struct trace_event_raw_kvm_inj_virq {
   unsigned short common_type;
@@ -45,7 +49,7 @@ struct trace_event_raw_kvm_inj_virq {
   unsigned int irq;
   __u8 type;
   __u8 injected;
-};
+} __attribute__((preserve_access_index));
 
 struct trace_event_raw_kvm_entry {
   unsigned short common_type;
@@ -54,7 +58,7 @@ struct trace_event_raw_kvm_entry {
   int common_pid;
 
   __u64 vcpu_id;
-};
+} __attribute__((preserve_access_index));
 
 struct trace_event_raw_kvm_mmu_page_fault {
   unsigned short common_type;
@@ -64,7 +68,7 @@ struct trace_event_raw_kvm_mmu_page_fault {
 
   __u64 gva;
   __u32 error_code;
-};
+} __attribute__((preserve_access_index));
 
 struct trace_event_raw_kvm_halt_poll_ns {
   unsigned short common_type;
@@ -75,6 +79,6 @@ struct trace_event_raw_kvm_halt_poll_ns {
   __u8 grow;
   unsigned int vcpu_id;
   __u64 ns;
-};
+} __attribute__((preserve_access_index));
 
 #endif /* __VMLINUX_H__ */

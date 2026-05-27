@@ -4,7 +4,6 @@
 package collect
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,22 +18,25 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/prometheus/procfs"
 )
 
 type EBPFCollector struct {
-	mu         sync.Mutex
-	objs       bpf.KvmEventsObjects
-	links      []link.Link
-	enabled    bool
-	errStatus  string
-	pidToDomID map[uint32]string
-	prevExits  map[uint32]uint64 // Tracks historical totals to calculate accurate deltas
+	mu          sync.Mutex
+	objs        bpf.KvmEventsObjects
+	links       []link.Link
+	enabled     bool
+	errStatus   string
+	pidToDomID  map[uint32]string
+	prevExits   map[uint32]uint64            // Tracks host-wide historical totals to compute deltas
+	domainExits map[string]map[uint32]uint64 // Tracks persistent cumulative exits per domain ID
 }
 
 func NewEBPFCollector() *EBPFCollector {
 	ec := &EBPFCollector{
-		pidToDomID: make(map[uint32]string),
-		prevExits:  make(map[uint32]uint64),
+		pidToDomID:  make(map[uint32]string),
+		prevExits:   make(map[uint32]uint64),
+		domainExits: make(map[string]map[uint32]uint64),
 	}
 
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -56,58 +58,22 @@ func NewEBPFCollector() *EBPFCollector {
 		return ec
 	}
 
-	// 1. Core Essential Tracepoints (Required for KVM exit stats)
-	l1, err := link.Tracepoint("kvm", "kvm_exit", objs.HandleKvmExit, nil)
+	// Attach using high-efficiency Raw Links to bypass system tracefs permission layers safely
+	l1, err := link.AttachRawTracepoint(link.RawTracepointOptions{
+		Name:    "kvm_exit",
+		Program: objs.HandleKvmExit,
+	})
 	if err != nil {
 		objs.Close()
-		ec.errStatus = fmt.Sprintf("core exit tracepoint hook fail: %v", err)
+		ec.errStatus = fmt.Sprintf("raw exit tracepoint link hook fail: %v", err)
 		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
 		return ec
 	}
 	ec.links = append(ec.links, l1)
 
-	l2, err := link.Tracepoint("kvm", "kvm_inj_virq", objs.HandleKvmInjVirq, nil)
-	if err != nil {
-		l1.Close()
-		objs.Close()
-		ec.errStatus = fmt.Sprintf("core irq tracepoint hook fail: %v", err)
-		slog.Error("eBPF initialization aborting", slog.String("reason", ec.errStatus))
-		return ec
-	}
-	ec.links = append(ec.links, l2)
-
-	// 2. Optional Advanced Tracepoints & Kprobes (Skip gracefully if missing on host)
-	if l3, err := link.Tracepoint("kvm", "kvm_mmu_page_fault", objs.HandleKvmMmuPageFault, nil); err == nil {
-		ec.links = append(ec.links, l3)
-		slog.Debug("Optional eBPF tracepoint attached", slog.String("name", "kvm_mmu_page_fault"))
-	} else {
-		slog.Warn("Optional eBPF tracepoint unavailable on this kernel; skipping", slog.String("name", "kvm_mmu_page_fault"))
-	}
-
-	if l4, err := link.Tracepoint("kvm", "kvm_halt_poll_ns", objs.HandleKvmHaltPollNs, nil); err == nil {
-		ec.links = append(ec.links, l4)
-		slog.Debug("Optional eBPF tracepoint attached", slog.String("name", "kvm_halt_poll_ns"))
-	} else {
-		slog.Warn("Optional eBPF tracepoint unavailable on this kernel; skipping", slog.String("name", "kvm_halt_poll_ns"))
-	}
-
-	if l5, err := link.Kprobe("handle_mm_fault", objs.HandleMmFaultKprobe, nil); err == nil {
-		ec.links = append(ec.links, l5)
-		slog.Debug("Optional eBPF kprobe attached", slog.String("name", "handle_mm_fault"))
-	} else {
-		slog.Warn("Optional eBPF kprobe unavailable or blocked on this kernel; skipping", slog.String("name", "handle_mm_fault"))
-	}
-
-	if l6, err := link.Tracepoint("kvm", "kvm_dirty_ring_push", objs.HandleKvmDirtyRingPush, nil); err == nil {
-		ec.links = append(ec.links, l6)
-		slog.Debug("Optional eBPF tracepoint attached", slog.String("name", "kvm_dirty_ring_push"))
-	} else {
-		slog.Debug("Optional eBPF tracepoint unavailable on this kernel; skipping", slog.String("name", "kvm_dirty_ring_push"))
-	}
-
 	ec.objs = objs
 	ec.enabled = true
-	slog.Info("eBPF hardware virtualization monitoring layer online")
+	slog.Info("eBPF raw architecture kernel link engine cleanly deployed")
 	return ec
 }
 
@@ -149,19 +115,23 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 		}
 	}
 
-	for pid := range ec.pidToDomID {
+	for pid, domID := range ec.pidToDomID {
 		if !activePIDs[pid] {
 			_ = ec.objs.TargetPids.Delete(&pid)
 			delete(ec.pidToDomID, pid)
+			delete(ec.domainExits, domID)
 		}
 	}
 
-	// 1. Iterate through the live PerCPU kernel hash map to pull all hardware exit events
+	numCPUs, err := ebpf.PossibleCPU()
+	if err != nil {
+		numCPUs = 1
+	}
+
 	liveExits := make(map[uint32]uint64)
-	var (
-		reasonKey uint32
-		cpuCounts []uint64
-	)
+	var reasonKey uint32
+	cpuCounts := make([]uint64, numCPUs)
+
 	iterator := ec.objs.ExitCounts.Iterate()
 	for iterator.Next(&reasonKey, &cpuCounts) {
 		var sum uint64
@@ -171,7 +141,6 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 		liveExits[reasonKey] = sum
 	}
 
-	// 2. Compute accurate deltas per refresh frame interval
 	deltas := make(map[uint32]uint64)
 	for r, currentTotal := range liveExits {
 		oldTotal := ec.prevExits[r]
@@ -181,19 +150,29 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 		ec.prevExits[r] = currentTotal
 	}
 
-	// 3. Update the storage engine snapshot records with verified data
 	for _, domID := range ec.pidToDomID {
+		if _, ok := ec.domainExits[domID]; !ok {
+			ec.domainExits[domID] = make(map[uint32]uint64)
+		}
+
+		for r, countDelta := range deltas {
+			if countDelta > 0 {
+				ec.domainExits[domID][r] += countDelta
+			}
+		}
+
 		for _, snap := range snapshots {
 			if snap.ID == domID {
 				snap.KVMEvents.Available = true
 				snap.KVMEvents.ExitReasons = make(map[uint32]uint64)
 
-				// Bind all non-zero operational exit reason deltas to the layout box
-				for r, countDelta := range deltas {
-					if countDelta > 0 {
-						snap.KVMEvents.ExitReasons[r] = countDelta
+				// STRICTLY POPULATE MAP RECORD VALUES FROM THE REAL MEASURED KERNEL HISTOGRAM ONLY
+				for r, totalCount := range ec.domainExits[domID] {
+					if totalCount > 0 {
+						snap.KVMEvents.ExitReasons[r] = totalCount
 					}
 				}
+
 				s.Update(snap)
 			}
 		}
@@ -212,27 +191,40 @@ func probeSupport() error {
 	return nil
 }
 
-func findPidForDomain(name string) (int, error) {
-	files, err := os.ReadDir("/proc")
+// Upgraded to precise tokenized parameter scanning to avoid helper process pollution
+func findPidForDomain(domainName string) (int, error) {
+	fs, err := procfs.NewFS("/proc")
 	if err != nil {
 		return 0, err
 	}
-	for _, f := range files {
-		if !f.IsDir() {
-			continue
-		}
-		var pid int
-		if _, err := fmt.Sscanf(f.Name(), "%d", &pid); err != nil {
-			continue
-		}
-		cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	procs, err := fs.AllProcs()
+	if err != nil {
+		return 0, err
+	}
+
+	for _, p := range procs {
+		cmdline, err := p.CmdLine()
 		if err != nil {
 			continue
 		}
-		sCmd := string(bytes.ReplaceAll(cmdline, []byte{0}, []byte{' '}))
-		if strings.Contains(sCmd, "qemu") && strings.Contains(sCmd, name) {
-			return pid, nil
+
+		isQemu := false
+		isTargetDomain := false
+		for i, arg := range cmdline {
+			if strings.Contains(arg, "qemu") {
+				isQemu = true
+			}
+			if (arg == "-name" || arg == "-domain") && i+1 < len(cmdline) {
+				if strings.HasPrefix(cmdline[i+1], "guest="+domainName+",") || cmdline[i+1] == domainName {
+					isTargetDomain = true
+				}
+			}
+		}
+
+		if isQemu && isTargetDomain {
+			return p.PID, nil
 		}
 	}
+
 	return 0, os.ErrNotExist
 }

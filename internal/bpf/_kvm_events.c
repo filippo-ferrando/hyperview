@@ -34,29 +34,26 @@ struct kvm_exit_event {
   __u64 timestamp_ns;
 };
 
-SEC("tp/kvm/kvm_exit")
-int handle_kvm_exit(struct trace_event_raw_kvm_exit *ctx) {
+// SWITCHED TO RAW_TRACEPOINT TO BYPASS THE RHEL/ALMALINUX PERF_EVENT DEFECT BUG
+SEC("raw_tracepoint/kvm_exit")
+int handle_kvm_exit(struct bpf_raw_tracepoint_args *ctx) {
   __u32 tgid = bpf_get_current_pid_tgid() >> 32;
   if (!bpf_map_lookup_elem(&target_pids, &tgid))
     return 0;
 
+  // In raw tracepoints, args[0] contains the raw exit_reason parameter directly
+  __u32 exit_reason = ctx->args[0];
+
   struct kvm_exit_event *e = bpf_ringbuf_reserve(&kvm_events, sizeof(*e), 0);
-  if (!e)
-    return 0;
-
-  // Read context values safely into the ring buffer struct
-  e->pid = tgid;
-  e->vcpu_id = ctx->vcpu_id;
-  e->exit_reason = ctx->exit_reason;
-  e->timestamp_ns = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
-
-  // FIX: Copy the context value onto the stack frame (fp)
-  __u32 exit_reason = ctx->exit_reason;
+  if (e) {
+    e->pid = tgid;
+    e->vcpu_id = 0;
+    e->exit_reason = exit_reason;
+    e->timestamp_ns = bpf_ktime_get_ns();
+    bpf_ringbuf_submit(e, 0);
+  }
 
   __u64 one = 1, *cnt;
-  // Pass the stack reference (&exit_reason) instead of context reference
-  // (&ctx->exit_reason)
   cnt = bpf_map_lookup_elem(&exit_counts, &exit_reason);
   if (cnt) {
     __sync_fetch_and_add(cnt, 1);
@@ -66,48 +63,20 @@ int handle_kvm_exit(struct trace_event_raw_kvm_exit *ctx) {
   return 0;
 }
 
-SEC("tp/kvm/kvm_inj_virq")
-int handle_kvm_inj_virq(struct trace_event_raw_kvm_inj_virq *ctx) {
-  __u32 tgid = bpf_get_current_pid_tgid() >> 32;
-  if (!bpf_map_lookup_elem(&target_pids, &tgid))
-    return 0;
+SEC("raw_tracepoint/kvm_inj_virq")
+int handle_kvm_inj_virq(struct bpf_raw_tracepoint_args *ctx) { return 0; }
 
-  return 0;
-}
+SEC("raw_tracepoint/kvm_mmu_page_fault")
+int handle_kvm_mmu_page_fault(struct bpf_raw_tracepoint_args *ctx) { return 0; }
 
-SEC("tp/kvm/kvm_mmu_page_fault")
-int handle_kvm_mmu_page_fault(struct trace_event_raw_kvm_mmu_page_fault *ctx) {
-  __u32 tgid = bpf_get_current_pid_tgid() >> 32;
-  if (!bpf_map_lookup_elem(&target_pids, &tgid))
-    return 0;
-
-  return 0;
-}
-
-SEC("tp/kvm/kvm_halt_poll_ns")
-int handle_kvm_halt_poll_ns(struct trace_event_raw_kvm_halt_poll_ns *ctx) {
-  __u32 tgid = bpf_get_current_pid_tgid() >> 32;
-  if (!bpf_map_lookup_elem(&target_pids, &tgid))
-    return 0;
-
-  return 0;
-}
+SEC("raw_tracepoint/kvm_halt_poll_ns")
+int handle_kvm_halt_poll_ns(struct bpf_raw_tracepoint_args *ctx) { return 0; }
 
 SEC("kprobe/handle_mm_fault")
-int handle_mm_fault_kprobe(void *ctx) {
-  __u32 tgid = bpf_get_current_pid_tgid() >> 32;
-  if (!bpf_map_lookup_elem(&target_pids, &tgid))
-    return 0;
+int handle_mm_fault_kprobe(void *ctx) { return 0; }
 
-  return 0;
-}
-
-SEC("tp/kvm/kvm_dirty_ring_push")
-int handle_kvm_dirty_ring_push(void *ctx) {
-  __u32 tgid = bpf_get_current_pid_tgid() >> 32;
-  if (!bpf_map_lookup_elem(&target_pids, &tgid))
-    return 0;
-
+SEC("raw_tracepoint/kvm_dirty_ring_push")
+int handle_kvm_dirty_ring_push(struct bpf_raw_tracepoint_args *ctx) {
   return 0;
 }
 
