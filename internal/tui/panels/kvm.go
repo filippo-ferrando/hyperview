@@ -27,7 +27,7 @@ func RenderKVMPanel(snap store.DomainSnapshot, width int) string {
 	}
 
 	sb.WriteString(fmt.Sprintf(" Aggregate Hardware Interrupts (IRQ Injections): %d\n\n", snap.KVMEvents.IRQInjections))
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Render(" Top Virtual Machine Execution Exits:\n"))
+	sb.WriteString(lipgloss.NewStyle().Bold(true).Render(" Top Virtual Machine Execution Exits:") + "\n")
 
 	var rows []exitRow
 	var totalExits uint64
@@ -38,7 +38,8 @@ func RenderKVMPanel(snap store.DomainSnapshot, width int) string {
 
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Count > rows[j].Count })
 
-	maxBarWidth := width - 26
+	// Bar size tracker optimized for zero layout line wrapping
+	maxBarWidth := width - 45
 	if maxBarWidth < 10 {
 		maxBarWidth = 10
 	}
@@ -56,6 +57,13 @@ func RenderKVMPanel(snap store.DomainSnapshot, width int) string {
 		}
 
 		filledLength := int((pct / 100.0) * float64(maxBarWidth))
+		if filledLength < 0 {
+			filledLength = 0
+		}
+		if filledLength > maxBarWidth {
+			filledLength = maxBarWidth
+		}
+
 		bar := lipgloss.NewStyle().Foreground(lipgloss.Color("#D15FDF")).Render(strings.Repeat("█", filledLength))
 		empty := lipgloss.NewStyle().Foreground(lipgloss.Color("#252525")).Render(strings.Repeat("░", maxBarWidth-filledLength))
 

@@ -37,16 +37,16 @@ type MemStat struct {
 
 type IfaceStat struct {
 	Name    string
-	RxBytes uint64 // throughput delta per tick
-	TxBytes uint64 // throughput delta per tick
+	RxBytes uint64
+	TxBytes uint64
 	RxPkts  uint64
 	TxPkts  uint64
 }
 
 type DiskStat struct {
 	Dev     string
-	RdBytes uint64 // throughput delta per tick
-	WrBytes uint64 // throughput delta per tick
+	RdBytes uint64
+	WrBytes uint64
 	RdReqs  uint64
 	WrReqs  uint64
 }
@@ -107,7 +107,7 @@ func (s *DomainStore) Update(snap DomainSnapshot) {
 		s.domains[snap.ID] = entry
 	}
 
-	// Persist arrays across intermittent multi-collector updates
+	// Persist data models across intermittent collector thread intervals
 	if len(snap.Ifaces) == 0 && len(entry.latest.Ifaces) > 0 {
 		snap.Ifaces = entry.latest.Ifaces
 	}
@@ -120,6 +120,16 @@ func (s *DomainStore) Update(snap DomainSnapshot) {
 	if snap.Mem.AllocKiB == 0 && entry.latest.Mem.AllocKiB > 0 {
 		snap.Mem.AllocKiB = entry.latest.Mem.AllocKiB
 		snap.Mem.AvailableKiB = entry.latest.Mem.AvailableKiB
+	}
+
+	// FIX: Retain real-time kernel eBPF trace records if not populated in current tick
+	if !snap.KVMEvents.Available && entry.latest.KVMEvents.Available {
+		snap.KVMEvents = entry.latest.KVMEvents
+	}
+
+	// FIX: Retain live hypervisor migration metrics safely
+	if snap.Migration == nil && entry.latest.Migration != nil {
+		snap.Migration = entry.latest.Migration
 	}
 
 	entry.latest = snap

@@ -22,19 +22,19 @@ import (
 )
 
 type EBPFCollector struct {
-	mu          sync.Mutex
-	objs        bpf.KvmEventsObjects
-	links       []link.Link
-	enabled     bool
-	errStatus   string
-	pidToDomID  map[uint32]string
-	exitCounter map[string]map[uint32]uint64
+	mu         sync.Mutex
+	objs       bpf.KvmEventsObjects
+	links      []link.Link
+	enabled    bool
+	errStatus  string
+	pidToDomID map[uint32]string
+	prevExits  map[uint32]uint64 // Tracks historical totals to calculate accurate deltas
 }
 
 func NewEBPFCollector() *EBPFCollector {
 	ec := &EBPFCollector{
-		pidToDomID:  make(map[uint32]string),
-		exitCounter: make(map[string]map[uint32]uint64),
+		pidToDomID: make(map[uint32]string),
+		prevExits:  make(map[uint32]uint64),
 	}
 
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -149,39 +149,51 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 		}
 	}
 
-	for pid, domID := range ec.pidToDomID {
+	for pid := range ec.pidToDomID {
 		if !activePIDs[pid] {
 			_ = ec.objs.TargetPids.Delete(&pid)
 			delete(ec.pidToDomID, pid)
-			delete(ec.exitCounter, domID)
 		}
 	}
 
-	for _, domID := range ec.pidToDomID {
-		if _, ok := ec.exitCounter[domID]; !ok {
-			ec.exitCounter[domID] = make(map[uint32]uint64)
+	// 1. Iterate through the live PerCPU kernel hash map to pull all hardware exit events
+	liveExits := make(map[uint32]uint64)
+	var (
+		reasonKey uint32
+		cpuCounts []uint64
+	)
+	iterator := ec.objs.ExitCounts.Iterate()
+	for iterator.Next(&reasonKey, &cpuCounts) {
+		var sum uint64
+		for _, coreCount := range cpuCounts {
+			sum += coreCount
 		}
+		liveExits[reasonKey] = sum
+	}
 
-		ec.exitCounter[domID][12] += 4
-		ec.exitCounter[domID][48] += 2
+	// 2. Compute accurate deltas per refresh frame interval
+	deltas := make(map[uint32]uint64)
+	for r, currentTotal := range liveExits {
+		oldTotal := ec.prevExits[r]
+		if currentTotal >= oldTotal {
+			deltas[r] = currentTotal - oldTotal
+		}
+		ec.prevExits[r] = currentTotal
+	}
 
+	// 3. Update the storage engine snapshot records with verified data
+	for _, domID := range ec.pidToDomID {
 		for _, snap := range snapshots {
 			if snap.ID == domID {
 				snap.KVMEvents.Available = true
 				snap.KVMEvents.ExitReasons = make(map[uint32]uint64)
-				for r, c := range ec.exitCounter[domID] {
-					snap.KVMEvents.ExitReasons[r] = c
-				}
-				snap.KVMEvents.IRQInjections += 3
 
-				snap.KVMEvents.HaltPollNs += 12500
-				snap.KVMEvents.MMIOExits += 1
-
-				for i := range snap.VCPUs {
-					snap.VCPUs[i].WaitNs += 4500
-					snap.VCPUs[i].RunCount += 2
+				// Bind all non-zero operational exit reason deltas to the layout box
+				for r, countDelta := range deltas {
+					if countDelta > 0 {
+						snap.KVMEvents.ExitReasons[r] = countDelta
+					}
 				}
-				snap.Mem.MinorFaults += 8
 				s.Update(snap)
 			}
 		}
