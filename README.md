@@ -246,5 +246,7 @@ tracefs at load time.
 
 ## License
 
-GPL. The eBPF program is licensed GPL as required by the kernel helpers it
-uses.
+hyperview is free software, licensed under the GNU General Public License
+version 3 or (at your option) any later version (`GPL-3.0-or-later`); see
+[LICENSE](LICENSE). The eBPF program declares the `GPL` license string the
+kernel requires for the helpers it uses.

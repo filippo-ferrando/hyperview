@@ -14,7 +14,7 @@ description: |
   journald and serve Prometheus metrics.
 vendor: hyperview
 homepage: https://github.com/filippo-ferrando/hyperview
-license: GPL
+license: GPL-3.0-or-later
 
 contents:
   - src: ./bin/stage/hyperview
@@ -46,3 +46,6 @@ contents:
 
   - src: ./README.md
     dst: /usr/share/doc/hyperview/README.md
+
+  - src: ./LICENSE
+    dst: /usr/share/licenses/hyperview/LICENSE
