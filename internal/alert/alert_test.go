@@ -114,3 +114,27 @@ func TestMute(t *testing.T) {
 		t.Fatal("muted rule raised")
 	}
 }
+
+func TestEventSummary(t *testing.T) {
+	e := testEngine()
+	var got []Alert
+	e.Subscribe(func(a Alert, tr Transition) {
+		if tr == Summarized {
+			got = append(got, a)
+		}
+	})
+	t0 := time.Unix(1000, 0)
+	e.now = func() time.Time { return t0 }
+	for i := range 3 {
+		e.Raise(Alert{Rule: "x", Last: t0.Add(time.Duration(i) * time.Second)})
+	}
+	e.Raise(Alert{Rule: "once", Last: t0})
+	e.Evaluate(t0.Add(30*time.Second), nil)
+	if len(got) != 0 {
+		t.Fatal("summary before the window closed")
+	}
+	e.Evaluate(t0.Add(2*time.Minute), nil)
+	if len(got) != 1 || got[0].Rule != "x" || got[0].Count != 3 {
+		t.Fatalf("summaries %+v", got)
+	}
+}

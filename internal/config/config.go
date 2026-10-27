@@ -32,6 +32,8 @@ func (d Duration) MarshalText() ([]byte, error) { return []byte(d.String()), nil
 type Config struct {
 	Interval Duration `toml:"interval"`
 	LogLevel string   `toml:"log_level"`
+	// Listen is the address of the Prometheus endpoint; empty disables it.
+	Listen string `toml:"listen"`
 
 	Probes     Probes     `toml:"probes"`
 	Kmsg       Kmsg       `toml:"kmsg"`

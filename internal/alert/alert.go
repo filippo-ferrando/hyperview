@@ -81,6 +81,9 @@ const (
 	Repeated  Transition = "repeated"
 	Escalated Transition = "escalated" // severity of an active condition changed
 	Cleared   Transition = "resolved"
+	// Summarized closes the dedup window of an event that repeated; Count
+	// holds the total number of occurrences.
+	Summarized Transition = "summary"
 )
 
 // Sample is one observation of a condition, produced by a detector each
@@ -263,7 +266,7 @@ func (e *Engine) Evaluate(now time.Time, samples []Sample) {
 		}
 		delete(e.conds, k)
 	}
-	e.expireEvents(now)
+	ns = append(ns, e.expireEvents(now)...)
 	e.mu.Unlock()
 	e.notify(ns)
 }
@@ -331,12 +334,17 @@ func (e *Engine) pushHistory(a *Alert) {
 	}
 }
 
-func (e *Engine) expireEvents(now time.Time) {
+func (e *Engine) expireEvents(now time.Time) []notice {
+	var ns []notice
 	for k, a := range e.events {
 		if now.Sub(a.Last) >= e.cfg.Dedup.Duration {
+			if a.Count > 1 {
+				ns = append(ns, notice{*a, Summarized})
+			}
 			delete(e.events, k)
 		}
 	}
+	return ns
 }
 
 // Active returns firing conditions, most severe first.
