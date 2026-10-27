@@ -1,0 +1,51 @@
+# Built by `make package`; ARCH and VERSION come from the environment.
+name: hyperview
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: admin
+priority: optional
+maintainer: Filippo Ferrando <fferrando@elemento.cloud>
+description: |
+  Terminal monitor for KVM virtual machines with eBPF instrumentation.
+  Shows per-VM CPU, memory, network, disk and KVM exit metrics, catches
+  guest and host kernel problems, and can run headless to emit alerts to
+  journald and serve Prometheus metrics.
+vendor: hyperview
+homepage: https://github.com/filippo-ferrando/hyperview
+license: GPL-3.0-or-later
+
+contents:
+  - src: ./bin/stage/hyperview
+    dst: /usr/bin/hyperview
+    file_info:
+      mode: 0755
+
+  - src: ./packaging/config.toml
+    dst: /etc/hyperview/config.toml
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  - src: ./packaging/hyperview.service
+    dst: /usr/lib/systemd/system/hyperview.service
+    packager: deb
+  - src: ./packaging/hyperview.service
+    dst: /usr/lib/systemd/system/hyperview.service
+    packager: rpm
+  - src: ./packaging/hyperview.service
+    dst: /usr/lib/systemd/system/hyperview.service
+    packager: archlinux
+
+  - src: ./packaging/hyperview.openrc
+    dst: /etc/init.d/hyperview
+    packager: apk
+    file_info:
+      mode: 0755
+
+  - src: ./README.md
+    dst: /usr/share/doc/hyperview/README.md
+
+  - src: ./LICENSE
+    dst: /usr/share/licenses/hyperview/LICENSE

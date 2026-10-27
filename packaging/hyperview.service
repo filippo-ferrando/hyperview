@@ -1,0 +1,38 @@
+[Unit]
+Description=hyperview KVM monitor (headless alerts and Prometheus metrics)
+Documentation=https://github.com/filippo-ferrando/hyperview
+After=network.target libvirtd.service virtqemud.service
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/hyperview --headless --listen
+Restart=on-failure
+RestartSec=5s
+
+# Runs as root because it reads every hypervisor's /proc entries, follows
+# the kernel log and loads eBPF programs; the capability set below is the
+# most it can use.
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_SYSLOG CAP_DAC_READ_SEARCH CAP_SYS_RESOURCE
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# Not set on purpose: PrivateDevices and ProtectKernelLogs would hide
+# /dev/kmsg, PrivateNetwork would hide the hypervisors' tap devices.
+
+[Install]
+WantedBy=multi-user.target

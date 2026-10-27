@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vet and format
+        run: make vet
+      - name: Test
+        run: make test
+      - name: Build amd64 and arm64
+        run: make build-all
+
+  bpf:
+    # Compiles the eBPF source. The committed object is not diffed: its bytes
+    # depend on the clang version, use `make check-bpf` locally for that.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install clang and libbpf headers
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libbpf-dev
+      - name: Generate
+        run: make bpf
+      - name: Build with the regenerated object
+        run: go build ./...
+
+  package:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build packages
+        run: make package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/

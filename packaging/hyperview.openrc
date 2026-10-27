@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+# hyperview KVM monitor: headless alerts and Prometheus metrics.
+
+name="hyperview"
+description="KVM monitor with eBPF (headless alerts and Prometheus metrics)"
+command="/usr/bin/hyperview"
+command_args="${HYPERVIEW_ARGS:---headless --listen}"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/hyperview.log"
+error_log="/var/log/hyperview.log"
+
+depend() {
+	need net
+	after libvirtd
+}
