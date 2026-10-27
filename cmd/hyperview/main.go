@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"hyperview/internal/alert"
@@ -21,7 +22,7 @@ import (
 	"hyperview/internal/store"
 	"hyperview/internal/tui"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func main() {
@@ -112,18 +113,23 @@ func main() {
 		}
 	})
 
+	var kmsgState atomic.Value // string: empty while following
+	kmsgState.Store("disabled in config")
 	if cfg.Kmsg.Enabled {
 		if r, err := kmsg.Open(); err == nil {
+			kmsgState.Store("")
 			lookup := func(pid int) (string, string, bool) {
 				d, ok := collect.DomainByPID(domainStore, pid)
 				return d.ID, d.Name, ok
 			}
 			go func() {
 				if err := alert.FollowKmsg(ctx, r, cfg.Kmsg.Replay.Duration, lookup, engine.Raise); err != nil {
+					kmsgState.Store("stopped: " + err.Error())
 					slog.Warn("kernel log reader stopped", slog.Any("err", err))
 				}
 			}()
 		} else {
+			kmsgState.Store(err.Error())
 			slog.Warn("kernel log unavailable", slog.Any("err", err))
 		}
 	}
@@ -134,14 +140,16 @@ func main() {
 	})
 	go poller.Run(ctx, cfg.Interval.Duration)
 
-	rootModel := tui.NewRootModel(domainStore)
-	rootModel.SetTickInterval(cfg.Interval.Duration)
-	if *domainFilterFlag != "" {
-		rootModel.SetDomainFilter(*domainFilterFlag)
-	}
-
-	p := tea.NewProgram(rootModel, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	ui := tui.New(tui.Sources{
+		Store:   domainStore,
+		Alerts:  engine,
+		Config:  cfg,
+		Probes:  ebpfColl.Status,
+		EBPF:    ebpfColl.Enabled,
+		Kmsg:    func() string { return kmsgState.Load().(string) },
+		Libvirt: libvirtColl.Connected,
+	}, *domainFilterFlag)
+	if _, err := tea.NewProgram(ui).Run(); err != nil {
 		slog.Error("UI failed", slog.Any("err", err))
 		os.Exit(1)
 	}
