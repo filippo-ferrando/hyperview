@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"hyperview/internal/store"
 )
 
 // KVMProcess is a host process that owns a KVM VM file descriptor.
@@ -254,4 +256,34 @@ func parseQemuMem(s string) uint64 {
 		return 0
 	}
 	return n * mult
+}
+
+// DomainByPID finds the domain owning a host pid, which may be the
+// hypervisor process or any of its threads.
+func DomainByPID(s *store.DomainStore, pid int) (store.DomainSnapshot, bool) {
+	tgid := pid
+	if b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status"); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(line, "Tgid:"); ok {
+				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+					tgid = n
+				}
+				break
+			}
+		}
+	}
+	for _, d := range s.Snapshot() {
+		if d.PID <= 0 {
+			continue
+		}
+		if d.PID == pid || d.PID == tgid {
+			return d, true
+		}
+		for _, v := range d.VCPUs {
+			if v.TID == pid {
+				return d, true
+			}
+		}
+	}
+	return store.DomainSnapshot{}, false
 }
