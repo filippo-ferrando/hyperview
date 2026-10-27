@@ -34,17 +34,17 @@ func (l *legacyLink) Close() error {
 }
 
 type EBPFCollector struct {
-	mu          sync.Mutex
-	objs        bpf.KvmEventsObjects
-	links       []bpfLink
-	enabled     bool
-	errStatus   string
-	pidToDomID  map[uint32]string
+	mu         sync.Mutex
+	objs       bpf.KvmEventsObjects
+	links      []bpfLink
+	enabled    bool
+	errStatus  string
+	pidToDomID map[uint32]string
 }
 
 func NewEBPFCollector() *EBPFCollector {
 	ec := &EBPFCollector{
-		pidToDomID:  make(map[uint32]string),
+		pidToDomID: make(map[uint32]string),
 	}
 
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -198,4 +198,3 @@ func probeSupport() error {
 	}
 	return nil
 }
-

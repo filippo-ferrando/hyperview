@@ -58,6 +58,7 @@ type cachedXML struct {
 	fetched time.Time
 	disks   []DiskSource
 	ifaces  []string
+	ifindex map[string]int
 }
 
 // DiskSource maps a guest disk to its host backing path.
@@ -72,19 +73,24 @@ type LibvirtCollector struct {
 	conn    net.Conn
 	l       *libvirt.Libvirt
 	sock    string
+	index   *ProcessIndex
 
 	rates       *rateTracker
 	xmlCache    map[string]*cachedXML
 	statsPeriod map[string]int32 // uuid -> domain ID the period was set for
 	alive       []store.DomainID
 	pids        map[store.DomainID]int
+	lastOK      time.Time
 }
 
-func NewLibvirtCollector(sockets ...string) *LibvirtCollector {
+// NewLibvirtCollector uses index, when non-nil, to find the QEMU PID of
+// domains whose pidfile is unreadable (e.g. session daemons).
+func NewLibvirtCollector(index *ProcessIndex, sockets ...string) *LibvirtCollector {
 	if len(sockets) == 0 {
 		sockets = DefaultLibvirtSockets
 	}
 	return &LibvirtCollector{
+		index:       index,
 		sockets:     sockets,
 		rates:       newRateTracker(),
 		xmlCache:    make(map[string]*cachedXML),
@@ -172,18 +178,21 @@ func (lc *LibvirtCollector) Collect(ctx context.Context, s *store.DomainStore) e
 	defer lc.mu.Unlock()
 
 	if err := lc.connect(); err != nil {
-		lc.alive = nil
-		lc.pids = map[store.DomainID]int{}
+		lc.expirePIDs()
 		return fmt.Errorf("libvirt unavailable: %w", err)
 	}
 
 	domains, _, err := lc.l.ConnectListAllDomains(1, 0)
 	if err != nil {
 		lc.disconnect()
+		lc.expirePIDs()
 		return err
 	}
 
 	now := time.Now()
+	if lc.index != nil {
+		lc.index.Refresh(now)
+	}
 	alive := make([]store.DomainID, 0, len(domains))
 	pids := make(map[store.DomainID]int, len(domains))
 	seenUUID := make(map[string]bool, len(domains))
@@ -218,6 +227,11 @@ func (lc *LibvirtCollector) Collect(ctx context.Context, s *store.DomainStore) e
 
 		if state == int32(libvirt.DomainRunning) || state == int32(libvirt.DomainPaused) {
 			snap.PID = libvirtPID(d.Name)
+			if snap.PID == 0 && lc.index != nil {
+				if p, ok := lc.index.ByUUID(uuid); ok {
+					snap.PID = p.PID
+				}
+			}
 			if snap.PID > 0 {
 				pids[id] = snap.PID
 			}
@@ -236,7 +250,17 @@ func (lc *LibvirtCollector) Collect(ctx context.Context, s *store.DomainStore) e
 	lc.rates.sweep()
 	lc.alive = alive
 	lc.pids = pids
+	lc.lastOK = now
 	return nil
+}
+
+// expirePIDs releases libvirt's claim on its QEMU processes once libvirt
+// has been unreachable for longer than the discovery grace period, so the
+// process scanner can take them over.
+func (lc *LibvirtCollector) expirePIDs() {
+	if time.Since(lc.lastOK) > discoveryGrace {
+		lc.pids = map[store.DomainID]int{}
+	}
 }
 
 // mergeLibvirt overwrites the fields libvirt owns while keeping what other
@@ -265,16 +289,7 @@ func mergeLibvirt(cur, n *store.DomainSnapshot) {
 		}
 	}
 
-	oldIf := make(map[string]store.IfaceStat, len(cur.Ifaces))
-	for _, i := range cur.Ifaces {
-		oldIf[i.Name] = i
-	}
 	cur.Ifaces = n.Ifaces
-	for i := range cur.Ifaces {
-		if o, ok := oldIf[cur.Ifaces[i].Name]; ok {
-			cur.Ifaces[i].Ifindex = o.Ifindex
-		}
-	}
 	cur.Disks = n.Disks
 	if !n.Running() && n.State != "paused" {
 		cur.KVM = store.KVMStat{}
@@ -333,15 +348,16 @@ func (lc *LibvirtCollector) collectRunning(d libvirt.Domain, uuid string, nrVCPU
 			}
 			k := uuid + "/net/" + ifname
 			snap.Ifaces = append(snap.Ifaces, store.IfaceStat{
-				Name:    ifname,
-				RxBps:   lc.rates.rate(k+"/rxb", float64(rxB), now),
-				TxBps:   lc.rates.rate(k+"/txb", float64(txB), now),
-				RxPps:   lc.rates.rate(k+"/rxp", float64(rxP), now),
-				TxPps:   lc.rates.rate(k+"/txp", float64(txP), now),
-				RxErrs:  nonNeg(rxE),
-				TxErrs:  nonNeg(txE),
-				RxDrops: nonNeg(rxD),
-				TxDrops: nonNeg(txD),
+				Name:     ifname,
+				Ifindex:  x.ifindex[ifname],
+				RxBps:    lc.rates.rate(k+"/rxb", float64(rxB), now),
+				TxBps:    lc.rates.rate(k+"/txb", float64(txB), now),
+				RxPps:    lc.rates.rate(k+"/rxp", float64(rxP), now),
+				TxPps:    lc.rates.rate(k+"/txp", float64(txP), now),
+				RxErrs:   nonNeg(rxE),
+				TxErrs:   nonNeg(txE),
+				RxDrops:  nonNeg(rxD),
+				TxDrops:  nonNeg(txD),
 				DropRate: lc.rates.rate(k+"/drop", float64(nonNeg(rxD)+nonNeg(txD)), now),
 			})
 		}
@@ -378,10 +394,11 @@ func (lc *LibvirtCollector) domainXML(d libvirt.Domain, uuid string, now time.Ti
 	if err := xml.Unmarshal([]byte(desc), &dx); err != nil {
 		return c
 	}
-	c = &cachedXML{domID: d.ID, fetched: now}
+	c = &cachedXML{domID: d.ID, fetched: now, ifindex: make(map[string]int)}
 	for _, i := range dx.Devices.Interfaces {
 		if i.Target.Dev != "" {
 			c.ifaces = append(c.ifaces, i.Target.Dev)
+			c.ifindex[i.Target.Dev] = int(readUint(filepath.Join("/sys/class/net", i.Target.Dev, "ifindex")))
 		}
 	}
 	for _, k := range dx.Devices.Disks {

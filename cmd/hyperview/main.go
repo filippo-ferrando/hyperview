@@ -65,7 +65,10 @@ func main() {
 
 	domainStore := store.NewDomainStore()
 	poller := collect.NewPoller(domainStore)
-	poller.Register(collect.NewLibvirtCollector())
+	kvmProcs := collect.NewProcessIndex(5 * time.Second)
+	libvirtColl := collect.NewLibvirtCollector(kvmProcs)
+	poller.Register(libvirtColl)
+	poller.Register(collect.NewScanCollector(kvmProcs, libvirtColl.PIDs))
 	if procColl, err := collect.NewProcCollector(); err == nil {
 		poller.Register(procColl)
 	} else {
