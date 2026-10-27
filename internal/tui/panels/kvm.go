@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-
 var (
 	cpuVendor     string
 	vendorTracker sync.Once

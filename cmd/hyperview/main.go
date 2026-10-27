@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"hyperview/internal/collect"
+	"hyperview/internal/probe"
 	"hyperview/internal/store"
 	"hyperview/internal/tui"
 
@@ -74,7 +75,11 @@ func main() {
 	} else {
 		slog.Warn("Host OS procfs engine offline", slog.Any("err", err))
 	}
-	poller.Register(collect.NewEBPFCollector())
+	ebpfColl := collect.NewEBPFCollector(probe.Config{})
+	poller.Register(ebpfColl)
+	go ebpfColl.RunEvents(ctx, func(ev collect.KernelEvent) {
+		slog.Info("kernel event", slog.Any("event", ev))
+	})
 	defer poller.Close()
 
 	tickDuration := time.Duration(*intervalFlag) * time.Millisecond

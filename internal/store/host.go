@@ -16,6 +16,17 @@ type HostStat struct {
 	SwapTotalKiB uint64
 	SwapFreeKiB  uint64
 	PSI          PSIStat
+	Disks        []HostDisk
+}
+
+// HostDisk is a host block device with eBPF-measured request latency.
+type HostDisk struct {
+	Name   string
+	IOPS   float64
+	AvgUs  float64
+	P99Us  float64
+	MaxUs  float64
+	Errors uint64 // cumulative failed requests since probes were loaded
 }
 
 // PSIStat holds the avg10 values of /proc/pressure/*; Available is false on
@@ -64,10 +75,19 @@ func (s *DomainStore) SetHost(h HostStat) {
 	s.host = h
 }
 
+// MutateHost applies fn to the host stats.
+func (s *DomainStore) MutateHost(fn func(*HostStat)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fn(&s.host)
+}
+
 func (s *DomainStore) Host() HostStat {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.host
+	h := s.host
+	h.Disks = append([]HostDisk(nil), s.host.Disks...)
+	return h
 }
 
 func (s *DomainStore) HostHistory() HostHistory {

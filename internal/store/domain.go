@@ -29,6 +29,10 @@ type DomainSnapshot struct {
 	KVM       KVMStat
 	Migration *MigrationStat
 
+	// Block request latency of I/O issued by the hypervisor process (eBPF).
+	BlkLatAvgUs float64
+	BlkLatP99Us float64
+
 	CollectedAt time.Time
 }
 
@@ -40,7 +44,6 @@ type VCPUStat struct {
 
 	// eBPF
 	ExitRate     float64 // kvm exits/s
-	ExitAvgNs    float64 // mean time from kvm_exit to the next kvm_entry
 	RunqAvgUs    float64 // mean scheduler run-queue delay over the last interval
 	RunqP99Us    float64 // p99 run-queue delay over the last interval
 	RunqMaxUs    float64
@@ -72,7 +75,11 @@ type IfaceStat struct {
 	TxErrs   uint64
 	RxDrops  uint64
 	TxDrops  uint64
-	DropRate float64 // host-side drops/s (rx+tx), libvirt counters or eBPF
+	DropRate float64 // drops/s (rx+tx) from hypervisor counters
+
+	// Kernel-side drops seen by eBPF on the host interface, by reason.
+	KernelDropRate float64
+	DropReasons    map[string]float64
 }
 
 type DiskStat struct {
@@ -84,15 +91,18 @@ type DiskStat struct {
 	ErrsTotal int64 // -1 when the hypervisor does not report errors
 }
 
+// KVMStat holds eBPF-derived hypervisor metrics.
 type KVMStat struct {
 	Available     bool
 	ExitRate      float64            // total exits/s
 	ExitReasons   map[string]float64 // decoded exit reason -> exits/s
-	UserExits     map[string]float64 // KVM_EXIT_* -> exits/s
+	UserExits     map[string]float64 // KVM_EXIT_* returns to userspace/s
 	IRQRate       float64
 	ExceptionRate float64
 	EmulFailTotal uint64
-	RunqP99Us     float64 // worst vCPU p99
+	HaltPollRate  float64 // halts resolved by polling/s
+	HaltWaitRate  float64 // halts that slept/s
+	RunqP99Us     float64 // worst vCPU p99 run-queue delay
 }
 
 type MigrationStat struct {
@@ -137,6 +147,9 @@ func (d *DomainSnapshot) clone() DomainSnapshot {
 	c := *d
 	c.VCPUs = append([]VCPUStat(nil), d.VCPUs...)
 	c.Ifaces = append([]IfaceStat(nil), d.Ifaces...)
+	for i := range c.Ifaces {
+		c.Ifaces[i].DropReasons = cloneMap(c.Ifaces[i].DropReasons)
+	}
 	c.Disks = append([]DiskStat(nil), d.Disks...)
 	c.KVM.ExitReasons = cloneMap(d.KVM.ExitReasons)
 	c.KVM.UserExits = cloneMap(d.KVM.UserExits)
