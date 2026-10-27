@@ -1,36 +1,71 @@
-BPF_SRC   := internal/bpf/_kvm_events.c
+# hyperview build. The eBPF object is generated with bpf2go and committed,
+# so building only needs Go; `make bpf` (clang + libbpf headers) is needed
+# only after changing internal/bpf/src.
 
-.PHONY: all build test lint bpf package rpm deb clean
+GO      ?= go
+NFPM    ?= $(GO) run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+ARCHES  ?= amd64 arm64
+FORMATS ?= deb rpm archlinux apk
 
-all: bpf build
+# Version from the nearest v* tag; untagged trees get 0.0.0-dev+<commit>.
+VERSION ?= $(shell v=$$(git describe --tags --match 'v*' 2>/dev/null); \
+	if [ -n "$$v" ]; then echo "$${v\#v}"; \
+	else echo "0.0.0-dev+$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"; fi)
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
-bpf:
-	@echo "Validating BPF integrity kernel structures..."
-	@mkdir -p internal/bpf
+PREFIX  ?= /usr
+DESTDIR ?=
+
+.PHONY: all build build-all bpf check-bpf test vet lint package install clean
+
+all: build
 
 build:
-	@mkdir -p bin
-	go generate ./internal/bpf
-	CGO_ENABLED=0 go build \
-	  -ldflags="-X hyperview/internal/version.Version=$$(git describe --tags 2>/dev/null || echo 'v1.0.0')" \
-	  -o bin/hyperview ./cmd/hyperview
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/hyperview ./cmd/hyperview
+
+# Static binaries for every target architecture: bin/hyperview-<arch>.
+build-all:
+	@for a in $(ARCHES); do \
+		echo "build linux/$$a"; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$a $(GO) build -trimpath -ldflags "$(LDFLAGS)" \
+			-o bin/hyperview-$$a ./cmd/hyperview || exit 1; \
+	done
+
+# Regenerate the eBPF object and Go bindings (one little-endian object
+# serves both amd64 and arm64).
+bpf:
+	$(GO) generate ./internal/bpf
+
+# Fails when the committed eBPF object is out of date with its source.
+check-bpf: bpf
+	git diff --exit-code -- internal/bpf
 
 test:
-	go test -v -race ./...
+	$(GO) test -race ./...
 
-lint:
-	@echo "Running golangci-lint check..."
-	@golangci-lint run ./... || echo "Note: golangci-lint not installed locally."
+vet:
+	$(GO) vet ./...
+	@test -z "$$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
 
-package: rpm deb
+lint: vet
+	@command -v golangci-lint >/dev/null && golangci-lint run ./... || echo "golangci-lint not installed, ran go vet only"
 
-rpm: build
-	@mkdir -p dist
-	nfpm package --packager rpm --target dist/
+# deb, rpm, Arch and Alpine packages for every architecture in dist/.
+package: build-all
+	@mkdir -p dist bin/stage
+	@for a in $(ARCHES); do \
+		cp bin/hyperview-$$a bin/stage/hyperview; \
+		for f in $(FORMATS); do \
+			ARCH=$$a VERSION=$(VERSION) $(NFPM) package --config packaging/nfpm.yaml \
+				--packager $$f --target dist/ || exit 1; \
+		done; \
+	done
 
-deb: build
-	@mkdir -p dist
-	nfpm package --packager deb --target dist/
+install: build
+	install -Dm755 bin/hyperview $(DESTDIR)$(PREFIX)/bin/hyperview
+	install -Dm644 packaging/hyperview.service $(DESTDIR)$(PREFIX)/lib/systemd/system/hyperview.service
+	@if [ ! -e $(DESTDIR)/etc/hyperview/config.toml ]; then \
+		install -Dm644 packaging/config.toml $(DESTDIR)/etc/hyperview/config.toml; fi
 
 clean:
 	rm -rf bin/ dist/

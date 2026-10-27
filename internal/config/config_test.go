@@ -3,6 +3,9 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,4 +46,40 @@ func TestLoadExplicitMissing(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.toml")); err == nil {
 		t.Fatal("explicit missing config must fail")
 	}
+}
+
+// TestExampleConfig keeps packaging/config.toml in sync: with every key
+// uncommented it must parse and equal the built-in defaults.
+func TestExampleConfig(t *testing.T) {
+	b, err := os.ReadFile("../../packaging/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyLine := regexp.MustCompile(`^#(\w+\s*=.*)$`)
+	var out []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if m := keyLine.FindStringSubmatch(l); m != nil {
+			l = m[1]
+		}
+		out = append(out, l)
+	}
+	p := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(p, []byte(strings.Join(out, "\n")), 0o644)
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An empty list in the file decodes as [] where the default is nil.
+	got.Probes.Disabled = nilIfEmpty(got.Probes.Disabled)
+	got.Alerts.Mute = nilIfEmpty(got.Alerts.Mute)
+	if want := Default(); !reflect.DeepEqual(got, want) {
+		t.Errorf("example config differs from defaults:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+func nilIfEmpty(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
 }

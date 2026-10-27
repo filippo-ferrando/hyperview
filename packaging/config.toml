@@ -1,0 +1,60 @@
+# hyperview configuration. Every key is optional; the values shown are the
+# built-in defaults. Unknown keys are rejected so typos do not go unnoticed.
+
+# Collection and UI refresh interval.
+#interval = "1s"
+
+# debug | info | warn | error
+#log_level = "info"
+
+# Address of the Prometheus endpoint (/metrics). Empty disables it; the
+# --listen flag overrides it.
+#listen = ""
+
+[probes]
+# eBPF features to skip: kvm-exits, kvm-errors, kvm-irq, kvm-halt,
+# runqueue, lifecycle, block, net-drops, oom, mce
+#disabled = []
+
+[kmsg]
+# Follow /dev/kmsg for oopses, lockups, hardware and I/O errors.
+#enabled = true
+# Kernel log records this old are still reported at startup.
+#replay = "10m"
+
+[qmp]
+# Poll the QMP socket of QEMU guests not managed by libvirt (Proxmox, plain
+# QEMU) for run state, per-disk stats and migration progress. QMP serves one
+# client at a time, so polling can briefly delay other management tools.
+#enabled = false
+#interval = "5s"
+#timeout = "500ms"
+
+[alerts]
+# Rule IDs that never raise alerts, e.g. ["vm.appeared", "vm.disappeared"].
+#mute = []
+# Past alerts kept in memory.
+#history = 1000
+# Repeats of the same event within this window are merged.
+#dedup = "1m"
+# A condition must hold this long before it fires...
+#raise_after = "3s"
+# ...and stay below threshold*clear_ratio this long before it resolves.
+#clear_after = "10s"
+#clear_ratio = 0.8
+
+# Thresholds: warn and crit levels; 0 disables a level.
+[thresholds]
+#runq_p99_us        = { warn = 5000,   crit = 20000 }   # vCPU run-queue delay p99, µs
+#vcpu_exit_rate     = { warn = 100000, crit = 250000 }  # VM exits/s per vCPU
+#guest_mem_free_pct = { warn = 10,     crit = 5 }       # guest usable memory %, lower is worse
+#guest_swap_in_kibs = { warn = 1024,   crit = 10240 }   # guest swap-in KiB/s
+#major_fault_rate   = { warn = 100,    crit = 1000 }    # hypervisor major faults/s
+#host_mem_free_pct  = { warn = 10,     crit = 5 }       # host MemAvailable %, lower is worse
+#psi_cpu_some       = { warn = 50,     crit = 80 }      # /proc/pressure avg10 %
+#psi_mem_some       = { warn = 10,     crit = 30 }
+#psi_mem_full       = { warn = 5,      crit = 15 }
+#psi_io_full        = { warn = 10,     crit = 30 }
+#disk_p99_us        = { warn = 50000,  crit = 200000 }  # host block device latency p99, µs
+#vm_block_p99_us    = { warn = 50000,  crit = 200000 }  # latency of a VM's block I/O p99, µs
+#net_drop_rate      = { warn = 10,     crit = 100 }     # drops/s per VM interface
