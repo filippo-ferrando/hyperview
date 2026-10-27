@@ -8,8 +8,8 @@ ARCHES  ?= amd64 arm64
 FORMATS ?= deb rpm archlinux apk
 
 # Version from the nearest v* tag; untagged trees get 0.0.0-dev+<commit>.
-VERSION ?= $(shell v=$$(git describe --tags --match 'v*' 2>/dev/null); \
-	if [ -n "$$v" ]; then echo "$${v\#v}"; \
+VERSION ?= $(shell v=$$(git describe --tags --match 'v*' 2>/dev/null | sed 's/^v//'); \
+	if [ -n "$$v" ]; then echo "$$v"; \
 	else echo "0.0.0-dev+$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"; fi)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
