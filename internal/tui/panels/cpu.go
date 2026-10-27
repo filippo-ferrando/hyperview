@@ -40,22 +40,14 @@ func RenderCPUPanel(snap store.DomainSnapshot, width int) string {
 
 		sb.WriteString(fmt.Sprintf(" vCPU #%-2d [%s%s] %5.1f%%\n", vcpu.Index, bar, empty, vcpu.CPUPercent))
 
-		if vcpu.WaitNs > 0 || vcpu.RunCount > 0 {
+		if vcpu.ExitRate > 0 || vcpu.RunqP99Us > 0 {
 			sb.WriteString(fmt.Sprintf(
-				"         %s Total Wait: %s ms | Exits/Runs: %s\n",
+				"         %s Runq p99: %s µs | Exits/s: %s\n",
 				waitLabelStyle.Render("↳"),
-				waitValueStyle.Render(fmt.Sprintf("%.2f", float64(vcpu.WaitNs)/1000000.0)),
-				waitValueStyle.Render(fmt.Sprintf("%d", vcpu.RunCount)),
+				waitValueStyle.Render(fmt.Sprintf("%.0f", vcpu.RunqP99Us)),
+				waitValueStyle.Render(fmt.Sprintf("%.0f", vcpu.ExitRate)),
 			))
 		}
-	}
-
-	if snap.KVMEvents.Available && snap.KVMEvents.HaltPollNs > 0 {
-		sb.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5F5FDF")).Bold(true).Render(fmt.Sprintf(
-			" Cumulative KVM Guest Halt-Polling Penalty: %d µs (MMIO Exits: %d)",
-			snap.KVMEvents.HaltPollNs/1000,
-			snap.KVMEvents.MMIOExits,
-		)) + "\n")
 	}
 
 	return sb.String()

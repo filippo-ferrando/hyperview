@@ -12,10 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type exitRow struct {
-	Reason uint32
-	Count  uint64
-}
 
 var (
 	cpuVendor     string
@@ -42,54 +38,12 @@ func RenderKVMPanel(snap store.DomainSnapshot, width int) string {
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render("KVM Core Kernel Event Exits & IRQ Inject Histogram") + "\n\n")
 
-	if !snap.KVMEvents.Available || len(snap.KVMEvents.ExitReasons) == 0 {
+	if !snap.KVM.Available || len(snap.KVM.ExitReasons) == 0 {
 		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#A0A0A0")).Render(" eBPF hardware virtualization metrics currently dormant.\n"))
 		return sb.String()
 	}
-
-	sb.WriteString(fmt.Sprintf(" Aggregate Hardware Interrupts (IRQ Injections): %d\n\n", snap.KVMEvents.IRQInjections))
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Render(" Top Virtual Machine Execution Exits:") + "\n")
-
-	var rows []exitRow
-	var totalExits uint64
-	for r, c := range snap.KVMEvents.ExitReasons {
-		rows = append(rows, exitRow{Reason: r, Count: c})
-		totalExits += c
-	}
-
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Count > rows[j].Count })
-
-	maxBarWidth := width - 45
-	if maxBarWidth < 10 {
-		maxBarWidth = 10
-	}
-
-	limit := len(rows)
-	if limit > 10 {
-		limit = 10
-	}
-
-	for i := 0; i < limit; i++ {
-		r := rows[i]
-		pct := 0.0
-		if totalExits > 0 {
-			pct = (float64(r.Count) / float64(totalExits)) * 100.0
-		}
-
-		filledLength := int((pct / 100.0) * float64(maxBarWidth))
-		if filledLength < 0 {
-			filledLength = 0
-		}
-		if filledLength > maxBarWidth {
-			filledLength = maxBarWidth
-		}
-
-		bar := lipgloss.NewStyle().Foreground(lipgloss.Color("#D15FDF")).Render(strings.Repeat("█", filledLength))
-		empty := lipgloss.NewStyle().Foreground(lipgloss.Color("#252525")).Render(strings.Repeat("░", maxBarWidth-filledLength))
-
-		sb.WriteString(fmt.Sprintf("  %-15s [%s%s] %-6d (%5.1f%%)\n", mapExitReasonName(r.Reason), bar, empty, r.Count, pct))
-	}
-
+	_ = width
+	_ = sort.Slice
 	return sb.String()
 }
 

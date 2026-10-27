@@ -17,13 +17,13 @@ func RenderMemPanel(snap store.DomainSnapshot) string {
 		lipgloss.Left,
 		titleStyle.Render("Memory Utilization Matrix & Kernel Fault Tracking"),
 		"",
-		fmt.Sprintf(" %s %s MiB", labelStyle.Render("Allocated Balloon Capacity:"), valStyle.Render(fmt.Sprintf("%d", snap.Mem.AllocKiB/1024))),
+		fmt.Sprintf(" %s %s MiB", labelStyle.Render("Allocated Balloon Capacity:"), valStyle.Render(fmt.Sprintf("%d", snap.Mem.BalloonKiB/1024))),
 		fmt.Sprintf(" %s %s MiB", labelStyle.Render("Guest Reported Available:  "), valStyle.Render(fmt.Sprintf("%d", snap.Mem.AvailableKiB/1024))),
 		fmt.Sprintf(" %s %s MiB", labelStyle.Render("Host Process Working RSS:  "), valStyle.Render(fmt.Sprintf("%d", snap.Mem.RssKiB/1024))),
 		"",
 		titleStyle.Render("Page Fault Counter Deltas"),
 		"",
-		fmt.Sprintf(" %s %s Context Switches/Ticks", labelStyle.Render("Minor Page Faults:"), valStyle.Render(fmt.Sprintf("%d", snap.Mem.MinorFaults))),
-		fmt.Sprintf(" %s %s Disk Swaps/IO Requests", labelStyle.Render("Major Page Faults:"), valStyle.Render(fmt.Sprintf("%d", snap.Mem.MajorFaults))),
+		fmt.Sprintf(" %s %s Context Switches/Ticks", labelStyle.Render("Minor Page Faults:"), valStyle.Render(fmt.Sprintf("%.0f/s", snap.Mem.MinorFltRate))),
+		fmt.Sprintf(" %s %s Disk Swaps/IO Requests", labelStyle.Render("Major Page Faults:"), valStyle.Render(fmt.Sprintf("%.0f/s", snap.Mem.MajorFltRate))),
 	)
 }

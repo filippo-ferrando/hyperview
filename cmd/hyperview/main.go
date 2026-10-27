@@ -64,39 +64,18 @@ func main() {
 	defer cancel()
 
 	domainStore := store.NewDomainStore()
-	registry := collect.NewRegistry()
-
-	registry.Register(collect.NewLibvirtCollector("/var/run/libvirt/libvirt-sock"))
-
-	procColl, err := collect.NewProcCollector()
-	if err == nil {
-		registry.Register(procColl)
+	poller := collect.NewPoller(domainStore)
+	poller.Register(collect.NewLibvirtCollector())
+	if procColl, err := collect.NewProcCollector(); err == nil {
+		poller.Register(procColl)
 	} else {
 		slog.Warn("Host OS procfs engine offline", slog.Any("err", err))
 	}
-
-	registry.Register(collect.NewEBPFCollector())
-	registry.Register(collect.NewQMPCollector("/var/run/libvirt/qemu"))
+	poller.Register(collect.NewEBPFCollector())
+	defer poller.Close()
 
 	tickDuration := time.Duration(*intervalFlag) * time.Millisecond
-	go func() {
-		ticker := time.NewTicker(tickDuration)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				for _, col := range registry.Collectors() {
-					if err := col.Collect(ctx, domainStore); err != nil {
-						slog.Debug("Poller transaction timeout skipped",
-							slog.String("collector", col.Name()),
-							slog.Any("err", err))
-					}
-				}
-			}
-		}
-	}()
+	go poller.Run(ctx, tickDuration)
 
 	rootModel := tui.NewRootModel(domainStore)
 	rootModel.SetTickInterval(tickDuration)
@@ -110,8 +89,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	for _, col := range registry.Collectors() {
-		_ = col.Close()
-	}
+	cancel()
 	slog.Info("Clean shutdown completed cleanly.")
 }

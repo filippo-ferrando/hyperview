@@ -139,55 +139,35 @@ func (m *RootModel) refreshTableData() {
 		snaps = filtered
 	}
 
-	sort.Slice(snaps, func(i, j int) bool {
+	key := func(d *store.DomainSnapshot) float64 {
+		switch m.sortColumn {
+		case 2:
+			return float64(len(d.VCPUs))
+		case 3:
+			return d.CPUPercent()
+		case 4:
+			return float64(d.Mem.RssKiB)
+		case 5:
+			rx, _ := d.NetRates()
+			return rx
+		case 6:
+			_, tx := d.NetRates()
+			return tx
+		case 7:
+			rd, wr := d.DiskRates()
+			return rd + wr
+		}
+		return 0
+	}
+	sort.SliceStable(snaps, func(i, j int) bool {
 		var less bool
 		switch m.sortColumn {
 		case 0:
 			less = snaps[i].Name < snaps[j].Name
 		case 1:
 			less = snaps[i].State < snaps[j].State
-		case 2:
-			less = len(snaps[i].VCPUs) < len(snaps[j].VCPUs)
-		case 3:
-			var cI, cJ float64
-			for _, v := range snaps[i].VCPUs {
-				cI += v.CPUPercent
-			}
-			for _, v := range snaps[j].VCPUs {
-				cJ += v.CPUPercent
-			}
-			less = cI < cJ
-		case 4:
-			less = snaps[i].Mem.RssKiB < snaps[j].Mem.RssKiB
-		case 5:
-			var rxI, rxJ uint64
-			for _, f := range snaps[i].Ifaces {
-				rxI += f.RxBytes
-			}
-			for _, f := range snaps[j].Ifaces {
-				rxJ += f.RxBytes
-			}
-			less = rxI < rxJ
-		case 6:
-			var txI, txJ uint64
-			for _, f := range snaps[i].Ifaces {
-				txI += f.TxBytes
-			}
-			for _, f := range snaps[j].Ifaces {
-				txJ += f.TxBytes
-			}
-			less = txI < txJ
-		case 7:
-			var ioI, ioJ uint64
-			for _, d := range snaps[i].Disks {
-				ioI += d.RdBytes + d.WrBytes
-			}
-			for _, d := range snaps[j].Disks {
-				ioJ += d.RdBytes + d.WrBytes
-			}
-			less = ioI < ioJ
 		default:
-			less = snaps[i].Name < snaps[j].Name
+			less = key(&snaps[i]) < key(&snaps[j])
 		}
 		if m.sortReverse {
 			return !less
@@ -197,27 +177,15 @@ func (m *RootModel) refreshTableData() {
 
 	var rows []table.Row
 	for _, snap := range snaps {
-		var totalCPU float64
-		for _, vcpu := range snap.VCPUs {
-			totalCPU += vcpu.CPUPercent
-		}
-		var totalRx, totalTx, totalIO uint64
-		for _, f := range snap.Ifaces {
-			totalRx += f.RxBytes
-			totalTx += f.TxBytes
-		}
-		for _, d := range snap.Disks {
-			totalIO += d.RdBytes + d.WrBytes
-		}
-
+		rx, tx := snap.NetRates()
+		rd, wr := snap.DiskRates()
 		stateLabel := snap.State
 		if snap.Migration != nil && snap.Migration.Status == "active" {
 			stateLabel = fmt.Sprintf("%s ⇄", snap.State)
 		}
-
 		rows = append(rows, table.Row{
-			snap.Name, stateLabel, fmt.Sprintf("%d", len(snap.VCPUs)), fmt.Sprintf("%5.1f%%", totalCPU),
-			fmt.Sprintf("%d MiB", snap.Mem.RssKiB/1024), panels.FormatBytes(totalRx), panels.FormatBytes(totalTx), panels.FormatBytes(totalIO),
+			snap.Name, stateLabel, fmt.Sprintf("%d", len(snap.VCPUs)), fmt.Sprintf("%5.1f%%", snap.CPUPercent()),
+			fmt.Sprintf("%d MiB", snap.Mem.RssKiB/1024), panels.FormatBytes(rx), panels.FormatBytes(tx), panels.FormatBytes(rd + wr),
 		})
 	}
 	m.table.SetRows(rows)
@@ -268,7 +236,7 @@ func (m RootModel) View() string {
 
 	ebpfIndicator := " [eBPF ✗ (fallback)]"
 	for _, snap := range m.store.Snapshot() {
-		if snap.KVMEvents.Available {
+		if snap.KVM.Available {
 			ebpfIndicator = " [eBPF ✓]"
 			break
 		}

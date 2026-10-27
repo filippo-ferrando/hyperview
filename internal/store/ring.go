@@ -22,11 +22,13 @@ func (r *RingBuffer[T]) Push(v T) {
 	}
 }
 
+// Slice returns a copy of the contents, oldest first.
 func (r *RingBuffer[T]) Slice() []T {
+	ret := make([]T, len(r.buf))
 	if len(r.buf) < r.size {
-		return r.buf
+		copy(ret, r.buf)
+		return ret
 	}
-	ret := make([]T, r.size)
 	for i := 0; i < r.size; i++ {
 		ret[i] = r.buf[(r.pos+i)%r.size]
 	}

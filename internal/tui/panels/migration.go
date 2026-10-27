@@ -23,10 +23,10 @@ func RenderMigrationPanel(snap store.DomainSnapshot, width int) string {
 		)
 	}
 
-	processed := snap.Migration.TotalPages - snap.Migration.DirtyPages
+	processed := snap.Migration.MemProcessed
 	pct := 0.0
-	if snap.Migration.TotalPages > 0 {
-		pct = (float64(processed) / float64(snap.Migration.TotalPages)) * 100.0
+	if snap.Migration.MemTotal > 0 {
+		pct = (float64(processed) / float64(snap.Migration.MemTotal)) * 100.0
 	}
 
 	maxBarWidth := width - 16
@@ -45,13 +45,13 @@ func RenderMigrationPanel(snap store.DomainSnapshot, width int) string {
 		titleStyle.Render("Live Virtual Machine Migration Engine Status"),
 		"",
 		fmt.Sprintf(" %s %s", labelStyle.Render("Cluster Sync Status:"), valStyle.Copy().Foreground(lipgloss.Color("#FFAF00")).Render(strings.ToUpper(snap.Migration.Status))),
-		fmt.Sprintf(" %s %d ms", labelStyle.Render("Elapsed Duration:   "), snap.Migration.TotalTimeMs),
+		fmt.Sprintf(" %s %d ms", labelStyle.Render("Elapsed Duration:   "), snap.Migration.ElapsedMs),
 		"",
 		labelStyle.Render(" Memory Mirroring Process Progression:"),
 		progressBarLayout,
-		fmt.Sprintf(" %s %s Pages / Total: %s Pages", labelStyle.Render("Synchronized Matrix:"), valStyle.Render(fmt.Sprintf("%d", processed)), valStyle.Render(fmt.Sprintf("%d", snap.Migration.TotalPages))),
+		fmt.Sprintf(" %s %s bytes / Total: %s bytes", labelStyle.Render("Synchronized Matrix:"), valStyle.Render(fmt.Sprintf("%d", processed)), valStyle.Render(fmt.Sprintf("%d", snap.Migration.MemTotal))),
 		fmt.Sprintf(" %s %s Pages/s", labelStyle.Render("Kernel Dirty Page Rate:"), valStyle.Copy().Foreground(lipgloss.Color("#FF5F5F")).Render(fmt.Sprintf("%d", snap.Migration.DirtyPageRate))),
-		fmt.Sprintf(" Network Bandwidth Speed:    %s Mbps", valStyle.Render(fmt.Sprintf("%.1f", snap.Migration.MbpsDown))),
+		fmt.Sprintf(" Network Bandwidth Speed:    %s Mbps", valStyle.Render(fmt.Sprintf("%.1f", float64(snap.Migration.Bps)*8/1e6))),
 		fmt.Sprintf(" Target Reswitch Threshold:   %s ms downtime window", valStyle.Copy().Foreground(lipgloss.Color("#5FFF5F")).Render(fmt.Sprintf("%d", snap.Migration.ExpectedDownMs))),
 	)
 }

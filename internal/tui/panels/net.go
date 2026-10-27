@@ -17,8 +17,8 @@ func RenderNetPanel(snap store.DomainSnapshot, history store.DomainHistory) stri
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render("Network Interface Throughput Analytics") + "\n\n")
 
-	sb.WriteString(labelStyle.Render("Aggregate Download Sparkline (Rx): ") + sparklineStyle.Render(RenderSparklineUint64(history.RX)) + "\n")
-	sb.WriteString(labelStyle.Render("Aggregate Upload Sparkline (Tx):   ") + sparklineStyle.Render(RenderSparklineUint64(history.TX)) + "\n\n")
+	sb.WriteString(labelStyle.Render("Aggregate Download Sparkline (Rx): ") + sparklineStyle.Render(RenderSparkline(history.RX)) + "\n")
+	sb.WriteString(labelStyle.Render("Aggregate Upload Sparkline (Tx):   ") + sparklineStyle.Render(RenderSparkline(history.TX)) + "\n\n")
 
 	sb.WriteString(lipgloss.NewStyle().Bold(true).Render("Active Virtual Interfaces:\n"))
 	if len(snap.Ifaces) == 0 {
@@ -26,10 +26,10 @@ func RenderNetPanel(snap store.DomainSnapshot, history store.DomainHistory) stri
 	} else {
 		for _, iface := range snap.Ifaces {
 			sb.WriteString(fmt.Sprintf(
-				" ➔ %-10s | Rx: %-12s (Pkts: %-6d) | Tx: %-12s (Pkts: %-6d)\n",
+				" ➔ %-10s | Rx: %-12s (%6.0f pps) | Tx: %-12s (%6.0f pps)\n",
 				iface.Name,
-				FormatBytes(iface.RxBytes), iface.RxPkts,
-				FormatBytes(iface.TxBytes), iface.TxPkts,
+				FormatBytes(iface.RxBps), iface.RxPps,
+				FormatBytes(iface.TxBps), iface.TxPps,
 			))
 		}
 	}
@@ -37,11 +37,11 @@ func RenderNetPanel(snap store.DomainSnapshot, history store.DomainHistory) stri
 	return sb.String()
 }
 
-func RenderSparklineUint64(history []uint64) string {
+func RenderSparkline(history []float64) string {
 	if len(history) == 0 {
 		return "░░░░░░░░░░"
 	}
-	var max, min uint64
+	var max, min float64
 	max, min = history[0], history[0]
 	for _, v := range history {
 		if v > max {
@@ -59,7 +59,7 @@ func RenderSparklineUint64(history []uint64) string {
 			sb.WriteRune('▄')
 			continue
 		}
-		idx := int(float64(v-min) / float64(delta) * float64(len(blocks)-1))
+		idx := int((v - min) / delta * float64(len(blocks)-1))
 		if idx < 0 {
 			idx = 0
 		}
@@ -71,11 +71,11 @@ func RenderSparklineUint64(history []uint64) string {
 	return sb.String()
 }
 
-func FormatBytes(b uint64) string {
+func FormatBytes(b float64) string {
 	if b < 1024 {
-		return fmt.Sprintf("%d B/s", b)
+		return fmt.Sprintf("%.0f B/s", b)
 	} else if b < 1024*1024 {
-		return fmt.Sprintf("%.1f KB/s", float64(b)/1024.0)
+		return fmt.Sprintf("%.1f KB/s", b/1024.0)
 	}
-	return fmt.Sprintf("%.1f MB/s", float64(b)/(1024.0*1024.0))
+	return fmt.Sprintf("%.1f MB/s", b/(1024.0*1024.0))
 }

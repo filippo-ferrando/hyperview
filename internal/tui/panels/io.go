@@ -21,10 +21,10 @@ func RenderIOPanel(snap store.DomainSnapshot) string {
 	} else {
 		for _, disk := range snap.Disks {
 			sb.WriteString(fmt.Sprintf(
-				" ➔ %-10s | Read: %-12s (Reqs: %-6d) | Write: %-12s (Reqs: %-6d)\n",
+				" ➔ %-10s | Read: %-12s (%6.0f IOPS) | Write: %-12s (%6.0f IOPS)\n",
 				disk.Dev,
-				FormatBytes(disk.RdBytes), disk.RdReqs,
-				FormatBytes(disk.WrBytes), disk.WrReqs,
+				FormatBytes(disk.RdBps), disk.RdIOPS,
+				FormatBytes(disk.WrBps), disk.WrIOPS,
 			))
 		}
 	}

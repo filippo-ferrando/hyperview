@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 
 	"hyperview/internal/bpf"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/rlimit"
-	"github.com/prometheus/procfs"
 	"golang.org/x/sys/unix"
 )
 
@@ -42,13 +40,11 @@ type EBPFCollector struct {
 	enabled     bool
 	errStatus   string
 	pidToDomID  map[uint32]string
-	domainExits map[string]map[uint32]uint64
 }
 
 func NewEBPFCollector() *EBPFCollector {
 	ec := &EBPFCollector{
 		pidToDomID:  make(map[uint32]string),
-		domainExits: make(map[string]map[uint32]uint64),
 	}
 
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -154,92 +150,40 @@ func (ec *EBPFCollector) Collect(ctx context.Context, s *store.DomainStore) erro
 
 	snapshots := s.Snapshot()
 	activePIDs := make(map[uint32]bool)
-
 	for _, snap := range snapshots {
-		if snap.State == "running" {
-			pid, err := findPidForDomain(snap.Name)
-			if err == nil {
-				qemuPID := uint32(pid)
-				ec.pidToDomID[qemuPID] = snap.ID
-				activePIDs[qemuPID] = true
-
-				one := uint8(1)
-				_ = ec.objs.TargetPids.Update(&qemuPID, &one, ebpf.UpdateAny)
-			}
+		if snap.PID > 0 && snap.Running() {
+			pid := uint32(snap.PID)
+			ec.pidToDomID[pid] = snap.ID
+			activePIDs[pid] = true
+			one := uint8(1)
+			_ = ec.objs.TargetPids.Update(&pid, &one, ebpf.UpdateAny)
 		}
 	}
-
-	for pid, domID := range ec.pidToDomID {
+	for pid := range ec.pidToDomID {
 		if !activePIDs[pid] {
 			_ = ec.objs.TargetPids.Delete(&pid)
 			delete(ec.pidToDomID, pid)
-			delete(ec.domainExits, domID)
 		}
 	}
 
-	var (
-		reasonKey uint32
-		exitCount uint64
-	)
-	iterator := ec.objs.ExitCounts.Iterate()
-	for iterator.Next(&reasonKey, &exitCount) {
-		for _, domID := range ec.pidToDomID {
-			if ec.domainExits[domID] == nil {
-				ec.domainExits[domID] = make(map[uint32]uint64)
-			}
-			if exitCount > 0 {
-				ec.domainExits[domID][reasonKey] = exitCount
-			}
+	for _, snap := range snapshots {
+		if !activePIDs[uint32(snap.PID)] {
+			continue
 		}
-	}
-
-	for mainPID, domID := range ec.pidToDomID {
-		for _, snap := range snapshots {
-			if snap.ID == domID {
-				snap.KVMEvents.Available = true
-				snap.KVMEvents.ExitReasons = make(map[uint32]uint64)
-
-				for r, totalCount := range ec.domainExits[domID] {
-					if totalCount > 0 {
-						snap.KVMEvents.ExitReasons[r] = totalCount
-					}
+		s.Mutate(snap.ID, func(d *store.DomainSnapshot) {
+			d.KVM.Available = true
+			for i := range d.VCPUs {
+				tid := uint32(d.VCPUs[i].TID)
+				var metric struct {
+					ExitCount   uint64
+					LastExitTs  uint64
+					TotalWaitNs uint64
 				}
-
-				taskPath := fmt.Sprintf("/proc/%d/task", mainPID)
-				entries, err := os.ReadDir(taskPath)
-				if err == nil {
-					for _, entry := range entries {
-						tidStr := entry.Name()
-						commBytes, err := os.ReadFile(fmt.Sprintf("%s/%s/comm", taskPath, tidStr))
-						if err != nil {
-							continue
-						}
-						comm := string(bytes.TrimSpace(commBytes))
-
-						if strings.HasPrefix(comm, "CPU ") {
-							var vcpuIdx int
-							_, err := fmt.Sscanf(comm, "CPU %d", &vcpuIdx)
-							if err == nil && vcpuIdx >= 0 && vcpuIdx < len(snap.VCPUs) {
-								var tid uint32
-								if _, err := fmt.Sscanf(tidStr, "%d", &tid); err == nil {
-									var metric struct {
-										ExitCount   uint64
-										LastExitTs  uint64
-										TotalWaitNs uint64
-									}
-									if err := ec.objs.VcpuStats.Lookup(&tid, &metric); err == nil {
-										snap.VCPUs[vcpuIdx].RunCount = metric.ExitCount
-										snap.VCPUs[vcpuIdx].WaitNs = metric.TotalWaitNs
-									}
-								}
-							}
-						}
-					}
+				if tid != 0 && ec.objs.VcpuStats.Lookup(&tid, &metric) == nil {
+					d.VCPUs[i].ExitRate = float64(metric.ExitCount)
 				}
-
-				s.Update(snap)
 			}
-		}
+		})
 	}
 	return nil
 }
@@ -255,40 +199,3 @@ func probeSupport() error {
 	return nil
 }
 
-func findPidForDomain(domainName string) (int, error) {
-	fs, err := procfs.NewFS("/proc")
-	if err != nil {
-		return 0, err
-	}
-	procs, err := fs.AllProcs()
-	if err != nil {
-		return 0, err
-	}
-
-	for _, p := range procs {
-		cmdline, err := p.CmdLine()
-		if err != nil {
-			continue
-		}
-
-		isQemu := false
-		isTargetDomain := false
-		for i, arg := range cmdline {
-			if strings.Contains(arg, "qemu") {
-				isQemu = true
-			}
-			if (arg == "-name" || arg == "-domain") && i+1 < len(cmdline) {
-				val := cmdline[i+1]
-				if val == domainName || val == "guest="+domainName || strings.HasPrefix(val, "guest="+domainName+",") {
-					isTargetDomain = true
-				}
-			}
-		}
-
-		if isQemu && isTargetDomain {
-			return p.PID, nil
-		}
-	}
-
-	return 0, os.ErrNotExist
-}
