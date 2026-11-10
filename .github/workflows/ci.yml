@@ -32,7 +32,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install clang and libbpf headers
-        run: sudo apt-get update && sudo apt-get install -y clang llvm libbpf-dev
+        run: apt-get update -y && apt-get install -y clang llvm libbpf-dev
       - name: Generate
         run: make bpf
       - name: Build with the regenerated object
