@@ -50,7 +50,7 @@ jobs:
           go-version-file: go.mod
       - name: Build packages
         run: make package
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v3
         with:
           name: packages
           path: dist/

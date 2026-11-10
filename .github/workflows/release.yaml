@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git describe in the Makefile and the release notes need the tags.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet and format
+        run: make vet
+
+      - name: Test
+        run: make test
+
+      - name: Build packages
+        run: make package VERSION="${GITHUB_REF_NAME#v}"
+
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+
+      - name: Write release notes
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          range=${prev:+$prev..}$GITHUB_REF_NAME
+          {
+            echo "## Changes"
+            echo
+            git log --no-merges --pretty='- %s (%h)' "$range"
+          } > release-notes.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: release-notes.md
+          files: dist/*
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
